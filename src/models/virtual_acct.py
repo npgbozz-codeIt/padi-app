@@ -1,9 +1,13 @@
+from typing import TYPE_CHECKING
+
 from src.models.base import Base
 from datetime import datetime
 import uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import String, DateTime, text, ForeignKey
-# from src.models.profile import Profile
+
+if TYPE_CHECKING:
+    from src.models.profile import Profile
 
 
 class VirtualAcct(Base):
@@ -15,9 +19,9 @@ class VirtualAcct(Base):
     accoount_num: Mapped[str] = mapped_column(String(10), unique=True)
     account_name: Mapped[str] = mapped_column(String(125))
     paystack_customer_code: Mapped[str] = mapped_column(String(125))
-    updated_at: Mapped[datetime] = mapped_column(DateTime, sever_default=text("Now()"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=text("Now()"))
     # relationship
-    profile: Mapped["Profile"] = relationship(back_populates="virtualacct")
+    profile: Mapped["Profile"] = relationship(back_populates="virtualacct")  # type: ignore
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, sever_default=text("Now()"), onupdate=text("NOW()")
+        DateTime, server_default=text("Now()"), onupdate=text("NOW()")
     )

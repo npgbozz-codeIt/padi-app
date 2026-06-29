@@ -2,10 +2,6 @@
 import random
 from typing import Optional
 
-# print(help(random))
-firstname = "Zeenat"
-lastname = ""
-
 
 def tag_generator(firstname: str, lastname: Optional[str]) -> str:
     # cleaning and lowercasing first name
@@ -19,7 +15,3 @@ def tag_generator(firstname: str, lastname: Optional[str]) -> str:
     random_number = random.randint(100, 9999)
     tag = f"@{clean_firstname}{last_name}{random_number}"
     return tag
-
-
-tag = tag_generator(firstname, lastname)
-print(tag)

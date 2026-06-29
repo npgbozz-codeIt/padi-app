@@ -1,7 +1,11 @@
 from src.models.base import Base
+from typing import TYPE_CHECKING
 import uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import String, ForeignKey
+
+if TYPE_CHECKING:
+    from src.models.profile import Profile
 
 
 class UserIdentity(Base):
@@ -14,4 +18,4 @@ class UserIdentity(Base):
         ForeignKey("profile.id", ondelete="CASCADE")
     )
     # relationship
-    profile: Mapped["Profile"] = relationship(back_populates="identities")
+    profile: Mapped["Profile"] = relationship(back_populates="identities")  # type: ignore

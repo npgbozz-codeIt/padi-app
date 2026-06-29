@@ -14,14 +14,16 @@ class Profile(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_tag: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    user_wallet: Mapped[Decimal] = mapped_column(Numeric(12, 2), server_default="0.00")
+    user_wallet: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), server_default="0.00", nullable=False
+    )
     # paystack kyc information
     first_name: Mapped[str] = mapped_column(String(125))
     last_name: Mapped[str] = mapped_column(String(125))
     email: Mapped[str] = mapped_column(String(125), unique=True)
-    bnv: Mapped[str] = mapped_column(String(11), unique=True)
+    bnv: Mapped[str] = mapped_column(String(11), unique=True, nullable=True)
     # transactional pin
-    hash_pin: Mapped[str] = mapped_column(String(225), unique=True)
+    hash_pin: Mapped[str] = mapped_column(String(225), unique=True, nullable=True)
     # relashionships
     identities: Mapped[List["UserIdentity"]] = relationship(
         back_populates="profile", cascade="all, delete-orphan"

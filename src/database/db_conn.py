@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 # this will be our postgre connection url
 DATABASE_URL = "postgresql+asyncpg://postgres:dbpassword123@localhost:5432/mypadi_db"
 
-engine = create_async_engine(DATABASE_URL, echo=False)
+engine = create_async_engine(DATABASE_URL, echo=True)
 
 # sessionLocal = sesasionmaker(autoflush=False, autcommit=False, bind=engine)
 AsyncSessionLocal = async_sessionmaker(

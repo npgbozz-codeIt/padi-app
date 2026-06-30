@@ -29,7 +29,8 @@ class Profile(Base):
         back_populates="profile", cascade="all, delete-orphan"
     )
     user_vda: Mapped[Optional["VirtualAcct"]] = relationship(
-        back_populates="profile", uselist=False
+        back_populates="profile",
+        uselist=False,
     )
     date_created: Mapped[datetime] = mapped_column(
         DateTime, server_default=text("Now()")

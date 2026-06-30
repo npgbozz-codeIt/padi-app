@@ -21,7 +21,7 @@ class VirtualAcct(Base):
     paystack_customer_code: Mapped[str] = mapped_column(String(125))
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=text("Now()"))
     # relationship
-    profile: Mapped["Profile"] = relationship(back_populates="virtualacct")  # type: ignore
+    profile: Mapped["Profile"] = relationship(back_populates="user_vda")  # type: ignore
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=text("Now()"), onupdate=text("NOW()")
     )

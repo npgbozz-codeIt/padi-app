@@ -1,7 +1,8 @@
-#scr/schemas/enums
-from enum import StrEnum
+# scr/schemas/enums
+from enum import Enum
 
-class IntentEnum(StrEnum):
+
+class IntentEnum(str, Enum):
     START_ONBOARDING = "onboarding"
     CHECK_BALANCE = "check_balance"
     FUND_WALLET = "fund_wallet"
@@ -13,38 +14,38 @@ class IntentEnum(StrEnum):
     PAY_EDUCATION = "payfor_education"
     UNKNOWN = "unknown"
 
-class UserLang(StrEnum):
+
+class UserLang(str, Enum):
     ENGLISH = "english"
     PIDGIN = "pidgin"
     HAUSA = "hausa"
 
 
-#================ENUMS FOR BIGSUB AND THIRDPARTY PROVIDER============
-class TelecomProvider(StrEnum):
+# ================ENUMS FOR BIGSUB AND THIRDPARTY PROVIDER============
+class TelecomProvider(str, Enum):
     AIRTEL = "airtel"
     ETISALAT = "9mobile"
     GLO = "glo"
     MTN = "mtn"
 
-class CableTvProvider(StrEnum):
+
+class CableTvProvider(str, Enum):
     STARTIME = "startime"
     GOTV = "gotv"
     DSTV = "dstv"
 
-class BettingProvider(StrEnum):
+
+class BettingProvider(str, Enum):
     BET9JA = "bet9ja"
     SPORTYBET = "sportybet"
 
-class EducationProvider(StrEnum):
+
+class EducationProvider(str, Enum):
     JAMB = "jamb"
     WAEC = "waec"
     NECO = "neco"
 
-class IspProvider(StrEnum):
+
+class IspProvider(str, Enum):
     SMILE = "smile"
     SPECTRANET = "spectranet"
-
-
-    
-
-

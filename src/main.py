@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
 from fastapi import FastAPI, status
 from contextlib import asynccontextmanager
 from src.database.db_conn import engine

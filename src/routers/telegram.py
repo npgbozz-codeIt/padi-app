@@ -10,6 +10,7 @@ from src.database.db_conn import get_db
 from src.models.identity import UserIdentity
 from src.models.profile import Profile
 from src.utils.tag_generator import tag_generator
+from src.services.nlu_engine import classify_intent
 
 router = APIRouter()
 
@@ -27,10 +28,20 @@ async def telegram_webhook(
     result = await db.execute(stmt)
     existing_user = result.scalars().first()
     if existing_user:
+        user_message = payload.message.text or ""
+        if not user_message.strip():
+            return {
+                "sucess": 200,
+                "status": "ignored",
+                "reasons": "empty messages cant be process",
+            }
+        # Invoke our provider-agnostic intent classifier
+        nlu_analysis = await classify_intent(user_message)
         return {
             "success": 200,
             "status": "user is registered",
             "profile_id": existing_user.profile_id,
+            "intent_analysis": nlu_analysis.model_dump(),  # Dumps validation payload values directly
         }
     else:
         firstName = payload.message.message_from.first_name
@@ -53,7 +64,7 @@ async def telegram_webhook(
         )
         db.add(new_identity)
         await db.commit()  # Commit the transaction
-        await db.refresh()
+        await db.refresh(new_profile)
 
         return {
             "success": 201,

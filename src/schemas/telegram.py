@@ -14,11 +14,18 @@ class TelegramUser(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TelegramContact(BaseModel):
+    phone_number: str
+    first_name: str
+    user_id: Optional[int] = None
+
+
 class TelegramMessage(BaseModel):
     message_id: int
     message_from: TelegramUser = Field(..., alias="from")
     date: int
     text: Optional[str] = None
+    contact: Optional[TelegramContact] = None
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -1,3 +1,4 @@
+# src/models/profile.py
 from src.models.base import Base
 from src.models.identity import UserIdentity
 from src.models.virtual_acct import VirtualAcct
@@ -20,6 +21,13 @@ class Profile(Base):
     # paystack kyc information
     first_name: Mapped[str] = mapped_column(String(125))
     last_name: Mapped[str] = mapped_column(String(125))
+    phone_num: Mapped[str] = mapped_column(
+        String(15), unique=True, nullable=True, index=True
+    )
+    lang: Mapped[str] = mapped_column(String(20), nullable=True, default="english")
+    user_state: Mapped[str] = mapped_column(
+        String(50), nullable=True, default="awaiting_language"
+    )
     email: Mapped[str] = mapped_column(String(125), unique=True)
     bnv: Mapped[str] = mapped_column(String(11), unique=True, nullable=True)
     # transactional pin

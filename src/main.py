@@ -13,7 +13,9 @@ async def lifespan(app: FastAPI):
     print("checking database connection...")
     try:
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+            await conn.run_sync(
+                Base.metadata.create_all
+            )  # Create all tables (for development/testing purposes)
         print("database connection established successfully")
     except Exception as e:
         print(f"database connection failed: {e}")

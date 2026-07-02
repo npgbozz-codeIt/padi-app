@@ -1,92 +1,138 @@
+# test_webhook.py
 import asyncio
 import random
 from httpx import AsyncClient, ASGITransport
 from dotenv import load_dotenv
 
-# Load your environment variables first
 load_dotenv()
 
 from src.main import app
 
 
 async def test_padi_chatbot_flow():
-    print("\n🚀 Starting Stage 2.5 Async Integration Testing Cycle...")
+    print("\n🚀 Starting Stage 2.5 Async Multi-Step Onboarding Test Cycle...")
 
-    # Generate a random mock platform ID for testing
+    # Generate a unique mock platform ID for this lifecycle run
     mock_telegram_id = random.randint(100000000, 999999999)
 
-    # Initialize the correct asynchronous testing client transport layer
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
 
         # ----------------------------------------------------
-        # TEST 1: SIMULATING AN UNREGISTERED USER SIGNUP
+        # STEP 1: INITIAL HIT (UNREGISTERED -> AWAITING_LANGUAGE)
         # ----------------------------------------------------
         print(
-            f"\n[Test 1] Posting new user update (ID: {mock_telegram_id}) to webhook..."
+            f"\n[Step 1] Posting initial message from new user ({mock_telegram_id})..."
         )
-
-        onboarding_payload = {
-            "update_id": 111111111,
+        payload = {
+            "update_id": 100001,
             "message": {
-                "message_id": 4501,
+                "message_id": 5001,
                 "from": {
                     "id": mock_telegram_id,
                     "is_bot": False,
                     "first_name": "IdreezTest",
-                    "username": "npg_bozz_tester",
+                    "username": "tester_padi",
                 },
                 "date": 1719504000,
-                "text": "Hello, I want to join",
+                "text": "Hello",
             },
         }
+        res = await client.post("/webhook/telegram", json=payload)
+        print(f"Response: {res.json()}")
+        # Change this line in Step 1 of test_webhook.py:
+        assert (
+            res.status_code == 200
+        )  # HTTP status wrapper code enforced by FastAPI decorator
+        assert res.json()["success"] == 201  # Inner transactional dictionary code
+        assert res.json()["status"] == "user created successfully"
 
-        response_one = await client.post("/webhook/telegram", json=onboarding_payload)
-        print(f"Response Status Code: {response_one.status_code}")
-        print(f"Response Content: {response_one.json()}")
+        # ----------------------------------------------------
+        # STEP 2: SELECT LANGUAGE (AWAITING_LANGUAGE -> AWAITING_PHONE)
+        # ----------------------------------------------------
+        print("\n[Step 2] Sending preferred language selection ('pidgin')...")
+        payload["message"]["text"] = "pidgin"
+        payload["message"]["message_id"] += 1
 
-        assert response_one.status_code == 200 or response_one.status_code == 201
-        assert response_one.json()["status"] == "user created successfully"
+        res = await client.post("/webhook/telegram", json=payload)
+        print(f"Response: {res.json()}")
+        assert res.json()["status"] == "onboarding_progress"
+        assert res.json()["steps"] == "phone_number_request"
+
+        # ----------------------------------------------------
+        # STEP 3: SHARE PHONE NUMBER (AWAITING_PHONE -> AWAITING_BVN)
+        # ----------------------------------------------------
+        print("\n[Step 3] Simulating contact card phone number sharing...")
+        payload["message"]["text"] = None
+        payload["message"]["message_id"] += 1
+        payload["message"]["contact"] = {
+            "phone_number": "+2348031234567",
+            "first_name": "IdreezTest",
+            "user_id": mock_telegram_id,
+        }
+
+        res = await client.post("/webhook/telegram", json=payload)
+        print(f"Response: {res.json()}")
+        assert res.json()["status"] == "onboarding_progress"
+        assert res.json()["steps"] == "bvn_verification"
+
+        # ----------------------------------------------------
+        # STEP 4: PROVIDE BVN (AWAITING_BVN -> AWAITING_PIN)
+        # ----------------------------------------------------
+        print("\n[Step 4] Sending 11-digit BVN verification text...")
+        payload["message"]["contact"] = None  # Clear contact card
+        payload["message"]["text"] = "22233344455"
+        payload["message"]["message_id"] += 1
+
+        res = await client.post("/webhook/telegram", json=payload)
+        print(f"Response: {res.json()}")
+        assert res.json()["status"] == "onboarding_progress"
+        assert res.json()["steps"] == "transaction_pin_creation"
+
+        # ----------------------------------------------------
+        # STEP 5: CREATE PIN (AWAITING_PIN -> AWAITING_PIN_CONFIRMATION)
+        # ----------------------------------------------------
+        print("\n[Step 5] Sending initial 4-digit transaction PIN setup...")
+        payload["message"]["text"] = "1234"
+        payload["message"]["message_id"] += 1
+
+        res = await client.post("/webhook/telegram", json=payload)
+        print(f"Response: {res.json()}")
+        assert res.json()["status"] == "onboarding_progress"
+        assert res.json()["steps"] == "transaction_pin_confirmation"
+
+        # ----------------------------------------------------
+        # STEP 6: CONFIRM PIN (AWAITING_PIN_CONFIRMATION -> COMPLETED)
+        # ----------------------------------------------------
+        print("\n[Step 6] Confirming the matching 4-digit transaction PIN...")
+        payload["message"]["text"] = "1234"
+        payload["message"]["message_id"] += 1
+
+        res = await client.post("/webhook/telegram", json=payload)
+        print(f"Response: {res.json()}")
+        assert res.json()["status"] == "onboarding_complete"
+
+        # ----------------------------------------------------
+        # STEP 7: FULL TRANSACTION NLU ENGINE (COMPLETED STATE)
+        # ----------------------------------------------------
         print(
-            "✅ Test 1 Passed: Automated profile registration and tag creation successful."
+            "\n[Step 7] Testing fully onboarded transactional NLU airtime intent & slot path..."
         )
+        payload["message"]["text"] = "I wan buy MTN 500 airtime"
+        payload["message"]["message_id"] += 1
 
-        # ----------------------------------------------------
-        # TEST 2: SIMULATING A REGISTERED USER NLU INTENT ROUTING
-        # ----------------------------------------------------
-        print(f"\n[Test 2] Posting an airtime intent message using the SAME user ID...")
+        res = await client.post("/webhook/telegram", json=payload)
+        print(f"Response: {res.json()}")
+        assert res.status_code == 200
+        assert res.json()["status"] == "user is verified and active"
+        assert "intent_analysis" in res.json()
+        assert "extracted_slots" in res.json()
 
-        intent_payload = {
-            "update_id": 222222222,
-            "message": {
-                "message_id": 4502,
-                "from": {
-                    "id": mock_telegram_id,
-                    "is_bot": False,
-                    "first_name": "IdreezTest",
-                    "username": "npg_bozz_tester",
-                },
-                "date": 1719504100,
-                "text": "I wan buy MTN 500 airtime",  # Multi-lingual Nigerian Pidgin Input
-            },
-        }
-
-        response_two = await client.post("/webhook/telegram", json=intent_payload)
-        print(f"Response Status Code: {response_two.status_code}")
-        print(f"Response Content: {response_two.json()}")
-
-        assert response_two.status_code == 200
-        assert response_two.json()["status"] == "user is registered"
-        assert "intent_analysis" in response_two.json()
-
-        extracted_intent = response_two.json()["intent_analysis"]["action"]
-        print(f"🎯 LLM Extracted Action Value: {extracted_intent}")
         print(
-            "✅ Test 2 Passed: Conversational routing and structured Pydantic extraction successful."
+            "\n🏆 ALL STEPS PASSED! The onboarding state machine and slot engine are fully operational."
         )
 
 
 if __name__ == "__main__":
-    # Use standard asyncio runner to keep the event loop alive across both requests
     asyncio.run(test_padi_chatbot_flow())

@@ -189,10 +189,88 @@ async def telegram_webhook(
         # ========================================================
         elif profile_state == OnboardingState.COMPLETED:
             nlu_analysis = await classify_intent(user_message)
+            # Pull dynamic localized text dictionaries
+            from src.utils.responses import TRANSACTION_RESPONSES
+
+            tx_copy = TRANSACTION_RESPONSES.get(
+                user_lang, TRANSACTION_RESPONSES["english"]
+            )
 
             extracted_slots = None
             if nlu_analysis.action == "airtime_purchase":
                 extracted_slots = await extract_airtime_slots(user_message)
+                if (
+                    not extracted_slots
+                    or not extracted_slots.amount
+                    or not extracted_slots.network
+                ):
+                    return {
+                        "success": 200,
+                        "status": "transaction_error",
+                        "message": tx_copy["missing_slots"],
+                    }
+
+                target_phone = extracted_slots.phone_number or profile.phone_num
+                req_amount = int(extracted_slots.amount)
+                req_network = extracted_slots.network
+                # Execute our shared ledger guard infrastructure safely
+                from src.utils.ledger_guard import initialize_local_ledger
+                from src.models.transaction import TransactionType, TransactionStatus
+
+                cleared, local_tx = await initialize_local_ledger(
+                    db=db,
+                    profile=profile,
+                    amount=req_amount,
+                    recipient=target_phone,
+                    tx_type=TransactionType.AIRTIME,
+                    provider=req_network,
+                )
+
+                if not cleared:
+                    # Formats local copy using localized dictionary parameter replacements
+                    return {
+                        "success": 200,
+                        "status": "insufficient_funds",
+                        "message": tx_copy["insufficient_funds"].format(
+                            balance=profile.user_wallet or 0.0
+                        ),
+                    }
+
+                # ⚡ Execute Non-Blocking Vendor Handshake Loop
+                from src.services.bigisub import bigisub_client
+
+                vending_res = await bigisub_client.vend_airtime(
+                    phone=target_phone, amount=req_amount, network=req_network
+                )
+
+                if vending_res.get("success") is True:
+                    local_tx.status = TransactionStatus.SUCCESSFUL
+                    local_tx.reference = vending_res.get("transaction_id")
+                    await db.commit()
+
+                    return {
+                        "success": 200,
+                        "status": "transaction_successful",
+                        "message": tx_copy["vending_success"].format(
+                            amount=req_amount,
+                            provider=req_network,
+                            recipient=target_phone,
+                        ),
+                    }
+                else:
+                    # Rollback ledger state modifications instantly if vendor drops execution
+                    profile.user_wallet = float(profile.user_wallet) + req_amount
+                    local_tx.status = TransactionStatus.FAILED
+                    await db.commit()
+
+                    return {
+                        "success": 200,
+                        "status": "vendor_error",
+                        "message": tx_copy["vending_failed"].format(
+                            error=vending_res.get("error")
+                        ),
+                    }
+
             elif nlu_analysis.action == "data_purchase":
                 extracted_slots = await extract_datapurchase_slots(user_message)
             elif nlu_analysis.action == "betting_payment":

@@ -38,3 +38,25 @@ ONBOARDING_RESPONSES = {
         "completed": "An kammala rajista! 🥳 Barka da zuwa MyPadi. Wace lissafin kuke son biya yau?",
     },
 }
+
+
+TRANSACTION_RESPONSES = {
+    "english": {
+        "missing_slots": "❌ Details incomplete. Please specify the provider, amount, and phone number clearly.",
+        "insufficient_funds": "❌ Transaction failed. Insufficient funds. Your current wallet balance is ₦{balance}.",
+        "vending_success": "🎉 Success! ₦{amount} {provider} airtime has been sent to {recipient}.",
+        "vending_failed": "❌ Failed: {error}"
+    },
+    "pidgin": {
+        "missing_slots": "❌ Dis details no complete. Abeg tell me the network, how much, and phone number well.",
+        "insufficient_funds": "❌ Your money no reach. Your wallet balance na ₦{balance}.",
+        "vending_success": "🎉 E don go! We don send ₦{amount} {provider} airtime to {recipient}.",
+        "vending_failed": "❌ Error happen: {error}"
+    },
+    "hausa": {
+        "missing_slots": "❌ Cikakken bayani bai cika ba. Da fatan za a fadi hanyar sadarwa, adadin kudi, da lambar waya.",
+        "insufficient_funds": "❌ Kudinka bai isa ba. Ma'ajin ku shine ₦{balance}.",
+        "vending_success": "🎉 An yi nasara! An tura ₦{amount} {provider} zuwa {recipient}.",
+        "vending_failed": "❌ Kuskure: {error}"
+    }
+}

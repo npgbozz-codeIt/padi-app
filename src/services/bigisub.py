@@ -97,6 +97,7 @@ class BigisubClient:
                     if response.get("success") is True:
                         return {
                             "success": True,
+                            "error": None,
                             "transaction_id": response_json.get("data", {}).get(
                                 "transaction_id", {}
                             ),
@@ -135,6 +136,132 @@ class BigisubClient:
             except httpx.RequestError as exc:
                 logger.error(f"An error occurred while requesting Bigisub API: {exc}")
                 return {"error": "error accessing airtime endpoint"}
+
+    async def vend_data(
+        self,
+        phone: str,
+        plan_id: int,
+        network: str,
+    ) -> dict:
+        """
+        Sends an asynchronous request to Bigisub to process a live VTU airtime transaction.
+        """
+        url = f"{self.base_url}/vtu/data/purchase/"
+        network_mapping = {"mtn": 1, "glo": 2, "airtel": 3, "9mobile": 4}
+        clean_network = network.strip().lower()
+        network_id = network_mapping.get(clean_network)
+        if not network_id:
+            logger.error(
+                f"❌ Unsupported network provider requested for data: {network}"
+            )
+            return {
+                "success": False,
+                "error": f"Network provider '{network}' is not supported.",
+            }
+        data_payload = {
+            "network": network_id,
+            "plan": plan_id,
+            "phone_number": str(phone),
+            "pin": self.bigi_transaction_pin,
+            "ported_number": True,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                response = await client.post(
+                    url, headers=self.headers, json=data_payload
+                )
+                if response.status_code in [200, 201]:
+                    response_json = response.json()
+                    if response_json.get("success") is True:
+                        return {
+                            "success": True,
+                            "error": None,
+                            "transaction_id": response_json.get("data", {}).get(
+                                "transaction_id", {}
+                            ),
+                            "message": response_json.get(
+                                "message", "Data purchase successful"
+                            ),
+                        }
+                    else:
+                        logger.error(
+                            f"❌ Bigisub rejected data purchase validation: {response_json}"
+                        )
+                        return {
+                            "success": False,
+                            "error": response_json.get(
+                                "message", "Data purchase failed"
+                            ),
+                        }
+                else:
+                    #  Read the exact error message from Bigisub out of the 400 Bad Request payload
+                    try:
+                        error_json = response.json()
+                        error_msg = error_json.get("message", "Validation failed")
+
+                        # Check for nested validation error dictionaries
+                        if "errors" in error_json and error_json["errors"]:
+                            # Extract the first error message from the dictionary list
+                            first_err_key = list(error_json["errors"].keys())[0]
+                            error_msg = error_json["errors"][first_err_key][0]
+                    except Exception:
+                        error_msg = "Vendor validation error occurred."
+
+                    logger.error(
+                        f"❌ Bigisub Data Reject ({response.status_code}): {response.text}"
+                    )
+                    return {"success": False, "error": error_msg}
+            except httpx.RequestError as exc:
+                logger.error(
+                    f"🚨 Network error occurred while connecting to Bigisub: {exc}"
+                )
+                return {
+                    "success": False,
+                    "error": "Connection to payment gateway timed out.",
+                }
+
+    async def fetch_live_data_plans(self, network_id: int | None = None) -> dict:
+        """
+        Fetches the complete list of available data plans directly from Bigisub.
+        Allows optional filtering by network_id (1=MTN, 2=Glo, 3=Airtel, 4=9mobile).
+        """
+        url = f"{self.base_url}/vtu/data/plans/"
+
+        # Build query parameters if filtering by a specific network provider
+        params = {}
+        if network_id:
+            params["network"] = network_id
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            try:
+                response = await client.get(url, headers=self.headers, params=params)
+
+                if response.status_code == 200:
+                    response_json = response.json()
+                    if response_json.get("success") is True:
+                        return {
+                            "success": True,
+                            "plans": response_json.get("data", []),
+                            "error": None,
+                        }
+                    return {
+                        "success": False,
+                        "plans": [],
+                        "error": response_json.get("message"),
+                    }
+
+                logger.error(
+                    f"❌ Bigisub Plan Fetch Failed ({response.status_code}): {response.text}"
+                )
+                return {
+                    "success": False,
+                    "plans": [],
+                    "error": f"HTTP Error {response.status_code}",
+                }
+
+            except httpx.RequestError as exc:
+                logger.error(f"🚨 Network error fetching Bigisub data plans: {exc}")
+                return {"success": False, "plans": [], "error": "Connection timed out."}
 
 
 # Instantiating single global object machine for use across system layers

@@ -44,7 +44,6 @@ async def classify_intent(user_text: str) -> IntentClassification:
     Sends raw chat text to the active LLM engine
     and forces a strictly structured IntentClassification output.
     """
-    # Get a fresh or cached instance of the client dynamically
     client_instance = get_nlu_client()
     nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
 
@@ -65,20 +64,17 @@ async def classify_intent(user_text: str) -> IntentClassification:
             {"role": "user", "content": user_text},
         ],
     )
-    # 2. Dynamically await ONLY if it's an asynchronous coroutine (like Groq)
     if nlu_provider == "gemini":
-        return response_or_coroutine  # Gemini returns the object directly
+        return response_or_coroutine
     else:
-        return await response_or_coroutine  # Groq needs to be awaited
+        return await response_or_coroutine
 
 
-# all the following functions are similar to classify_intent but for different extraction tasks
 async def extract_airtime_slots(user_text: str) -> AirtimeExtraction:
     """
     Sends raw chat text to the active LLM engine
     and forces a strictly structured AirtimeExtraction output.
     """
-    # Get a fresh or cached instance of the client dynamically
     client_instance = get_nlu_client()
     nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
 
@@ -99,11 +95,10 @@ async def extract_airtime_slots(user_text: str) -> AirtimeExtraction:
             {"role": "user", "content": user_text},
         ],
     )
-    # 2. Dynamically await ONLY if it's an asynchronous coroutine (like Groq)
     if nlu_provider == "gemini":
-        return response_or_coroutine  # Gemini returns the object directly
+        return response_or_coroutine
     else:
-        return await response_or_coroutine  # Groq needs to be awaited
+        return await response_or_coroutine
 
 
 async def extract_datapurchase_slots(user_text: str) -> DataExtraction:
@@ -115,12 +110,12 @@ async def extract_datapurchase_slots(user_text: str) -> DataExtraction:
     nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
 
     model_name = (
-        "gemini_flash 1.5" if nlu_provider is "gemini" else "llama-3.3-70b-versatile"
+        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
     )
 
     system_prompt = (
         "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
-        "Analyze the input text carefully, extract airtime purchase parameters, and return the structured parameters."
+        "Analyze the input text carefully, extract data bundle purchase parameters (network, size, amount, phone_number, type), and return the structured parameters."
     )
 
     response_or_coroutine = client_instance.chat.completions.create(
@@ -146,7 +141,7 @@ async def extract_cabletv_slots(user_text: str) -> CableTvExtraction:
     nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
 
     model_name = (
-        "gemini_flash 1.5" if nlu_provider is "gemini" else "llama-3.3-70b-versatile"
+        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
     )
 
     system_prompt = (
@@ -177,7 +172,7 @@ async def extract_betting_slots(user_text: str) -> BettingExtraction:
     nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
 
     model_name = (
-        "gemini_flash 1.5" if nlu_provider is "gemini" else "llama-3.3-70b-versatile"
+        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
     )
 
     system_prompt = (
@@ -208,7 +203,7 @@ async def extract_education_slots(user_text: str) -> EducationExtraction:
     nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
 
     model_name = (
-        "gemini_flash 1.5" if nlu_provider is "gemini" else "llama-3.3-70b-versatile"
+        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
     )
 
     system_prompt = (
@@ -224,7 +219,6 @@ async def extract_education_slots(user_text: str) -> EducationExtraction:
             {"role": "user", "content": user_text},
         ],
     )
-
     if nlu_provider == "gemini":
         return response_or_coroutine
     else:
@@ -240,7 +234,7 @@ async def extract_isp_slots(user_text: str) -> IspExtraction:
     nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
 
     model_name = (
-        "gemini_flash 1.5" if nlu_provider is "gemini" else "llama-3.3-70b-versatile"
+        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
     )
 
     system_prompt = (
@@ -271,7 +265,7 @@ async def extract_electricity_slots(user_text: str) -> ElectricityExtraction:
     nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
 
     model_name = (
-        "gemini_flash 1.5" if nlu_provider is "gemini" else "llama-3.3-70b-versatile"
+        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
     )
 
     system_prompt = (

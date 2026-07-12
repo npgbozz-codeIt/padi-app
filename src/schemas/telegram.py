@@ -1,4 +1,4 @@
-# src/schemas/telegram
+# src/schemas/telegram.py
 from src.schemas.base import BaseModel
 from pydantic import ConfigDict, Field
 from typing import Optional
@@ -14,6 +14,19 @@ class TelegramUser(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TelegramChat(BaseModel):
+    """Parses Telegram's incoming chat context object (required for tracking active chat IDs)."""
+
+    id: int
+    type: str
+    title: Optional[str] = None
+    username: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class TelegramContact(BaseModel):
     phone_number: str
     first_name: str
@@ -23,6 +36,7 @@ class TelegramContact(BaseModel):
 class TelegramMessage(BaseModel):
     message_id: int
     message_from: TelegramUser = Field(..., alias="from")
+    chat: TelegramChat  # 🎯 Added this field to allow 'payload.message.chat.id' to work safely
     date: int
     text: Optional[str] = None
     contact: Optional[TelegramContact] = None

@@ -39,24 +39,56 @@ ONBOARDING_RESPONSES = {
     },
 }
 
-
 TRANSACTION_RESPONSES = {
     "english": {
+        "greeting": "Hello Padi! 👋 How can I help you today? You can tell me to buy airtime, purchase data, or handle your bills naturally!",
         "missing_slots": "❌ Details incomplete. Please specify the provider, amount, and phone number clearly.",
         "insufficient_funds": "❌ Transaction failed. Insufficient funds. Your current wallet balance is ₦{balance}.",
         "vending_success": "🎉 Success! ₦{amount} {provider} airtime has been sent to {recipient}.",
-        "vending_failed": "❌ Failed: {error}"
+        "vending_failed": "❌ Failed: {error}",
+        "coming_soon": "⚡ This bill payment feature is coming soon to MyPadi! Stay tuned.",
+        "fallback_safety": "I couldn't quite map that request to a bill, Padi. You can tell me to *'buy MTN airtime'* or *'recharge data'* naturally, and I'll handle it!",
     },
     "pidgin": {
+        "greeting": "Moni o Padi! 👋 How far? Wetin we dey run today? You fit tell me to buy airtime, data, or pay bills normal-normal!",
         "missing_slots": "❌ Dis details no complete. Abeg tell me the network, how much, and phone number well.",
         "insufficient_funds": "❌ Your money no reach. Your wallet balance na ₦{balance}.",
         "vending_success": "🎉 E don go! We don send ₦{amount} {provider} airtime to {recipient}.",
-        "vending_failed": "❌ Error happen: {error}"
+        "vending_failed": "❌ Error happen: {error}",
+        "coming_soon": "⚡ This bill payment feature dey come soon on MyPadi! Abeg stay tuned.",
+        "fallback_safety": "Boss, I no match that bill request clear-clear. You fit tell me *'buy MTN airtime'* or *'recharge data'* normal-normal, and I go run am sharp-sharp! ⚡",
     },
     "hausa": {
+        "greeting": "Sannu Padi! 👋 Yaya dai? Wace lissafin kuke son biya yau? Za ku iya siyan airtime, data, ko biyan kuɗi a sauƙaƙe!",
         "missing_slots": "❌ Cikakken bayani bai cika ba. Da fatan za a fadi hanyar sadarwa, adadin kudi, da lambar waya.",
         "insufficient_funds": "❌ Kudinka bai isa ba. Ma'ajin ku shine ₦{balance}.",
         "vending_success": "🎉 An yi nasara! An tura ₦{amount} {provider} zuwa {recipient}.",
-        "vending_failed": "❌ Kuskure: {error}"
-    }
+        "vending_failed": "❌ Kuskure: {error}",
+        "coming_soon": "⚡ Wannan fasalin biyan kuɗi yana zuwa kwanan nan akan MyPadi! Kasance tare da mu.",
+        "fallback_safety": "Ban gane wannan bukatar biyan kuɗi ba sarai. Kuna iya gaya mani *'sayi airtime na MTN'* ko *'sami data'* a sauƙaƙe, kuma zan tura muku da wuri! ⚡",
+    },
+}
+
+DATA_RESPONSES = {
+    "english": {
+        "confirm_direct": "📦 *Confirm Your Data Purchase*\n\nNetwork: {network}\nBundle Size: {size}\nValidity: {validity}\nCost: ₦{price}\nTarget Phone: {phone}\n\nClick the button below to authorize this payment via your wallet securely.",
+        "select_validity": "⚡ Choose your preferred *{network}* data lifespan category below:",
+        "list_plans": "📂 Available *{network} ({validity})* bundles. Select one to purchase:",
+        "price_anchor_fallback": "💡 *Plan Suggestion*\n\nWe couldn't find an exact match for {network} data at that price. Here are the closest active options on the network right now:",
+        "no_plans_found": "❌ Sorry Padi, no active data plans match your description at the moment. Type *'Airtel Data'* or *'MTN Data'* to view available options.",
+    },
+    "pidgin": {
+        "confirm_direct": "📦 *Confirm Your Data Purchase*\n\nNetwork: {network}\nBundle Size: {size}\nValidity: {validity}\nAmount: ₦{price}\nPhone Number: {phone}\n\nPress the button down to authorize dis payment from your wallet.",
+        "select_validity": "⚡ Select how long you want the *{network}* data to last:",
+        "list_plans": "📂 Clear *{network} ({validity})* plans. Choose the one you want:",
+        "price_anchor_fallback": "💡 *Better Option For You*\n\nThat exact price no dey for {network} data right now. Check out these active ones wey close to am:",
+        "no_plans_found": "❌ Aza man, we no see any plan wey match wetin you type. Abeg type *'MTN Data'* or *'Glo Data'* to see wetin dey ground.",
+    },
+    "hausa": {
+        "confirm_direct": "📦 *Tabbatar da Sayen Data*\n\nHanyar Sadarwa: {network}\nGirman Data: {size}\nTsawon Lokaci: {validity}\nFarashi: ₦{price}\nLambar Waya: {phone}\n\nDanna maɓallin da ke ƙasa don izinin biyan kuɗi.",
+        "select_validity": "⚡ Zaɓi tsawon lokacin da kake son *{network}* data ya ɗauka a ƙasa:",
+        "list_plans": "📂 Wadatar *{network} ({validity})* data. Zaɓi ɗaya don siya:",
+        "price_anchor_fallback": "💡 *Shawara Akan Data*\n\nBa mu sami takaimiman farashi na {network} data ba. Ga zaɓuɓɓuka mafi kusa da ke aiki yanzu:",
+        "no_plans_found": "❌ Gafara dai, ba a sami tsarin da ya dace da bayanin ku ba. Rubuta *'MTN Data'* don ganin wadanda ke akwai.",
+    },
 }

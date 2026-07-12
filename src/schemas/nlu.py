@@ -101,7 +101,7 @@ class AirtimeExtraction(Base):
         None,
         description="The extracted phone number for the airtime purchase.",
     )
-    provider: Annotated[
+    network: Annotated[
         Optional[TelecomProvider], BeforeValidator(coerce_to_telecom_enum)
     ] = Field(
         None,
@@ -155,13 +155,21 @@ class ElectricityExtraction(Base):
         None,
         description="The extracted amount for the electricity bill payment.",
     )
-    provider: Annotated[Optional[Disco], BeforeValidator(coerce_to_disco_enum)] = Field(
+    company: Annotated[Optional[Disco], BeforeValidator(coerce_to_disco_enum)] = Field(
         None,
-        description="The extracted electricity provider for the bill payment.",
+        description="The extracted electricity distribution company (DisCo) provider, matching the official code.",
     )
-    types: Optional[Literal["prepaid", "postpaid"]] = Field(
+    meter_no: Optional[str] = Field(
         None,
-        description="The extracted electricity bill type, either 'prepaid' or 'postpaid'.",
+        description="The extracted customer utility meter number isolated from the user message.",
+    )
+    meter_type: Optional[Literal["prepaid", "postpaid"]] = Field(
+        "prepaid",
+        description="The extracted electricity account type, either 'prepaid' or 'postpaid'. Defaults to 'prepaid'.",
+    )
+    phone_number: Optional[str] = Field(
+        None,
+        description="An optional specific recipient phone number extracted from the message to route the token voucher text message.",
     )
 
 

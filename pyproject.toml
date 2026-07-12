@@ -14,5 +14,6 @@ dependencies = [
     "instructor[google-genai]>=1.15.3",
     "psycopg2-binary>=2.9.12",
     "python-dotenv>=1.2.2",
+    "redis>=8.0.1",
     "sqlalchemy>=2.0.51",
 ]

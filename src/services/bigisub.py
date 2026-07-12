@@ -94,7 +94,7 @@ class BigisubClient:
                 )
                 if response.status_code in [200, 201]:
                     response_json = response.json()
-                    if response.get("success") is True:
+                    if response_json.get("success") is True:
                         return {
                             "success": True,
                             "error": None,
@@ -262,6 +262,65 @@ class BigisubClient:
             except httpx.RequestError as exc:
                 logger.error(f"🚨 Network error fetching Bigisub data plans: {exc}")
                 return {"success": False, "plans": [], "error": "Connection timed out."}
+
+    # ==electricity vending methods==
+
+    async def get_electricity_providers(self) -> dict:
+        """Fetches the list of active DisCo provider codes from Bigisub."""
+        url = f"{self.base_url}/bills/electricity/providers/"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                response = await client.get(url, headers=self.headers)
+                return response.json()
+            except Exception as e:
+                logger.error(f"🚨 Failed fetching electricity providers: {e}")
+                return {"success": False, "message": str(e)}
+
+    async def verify_meter(
+        self, company: str, meter_no: str, meter_type: str = "prepaid"
+    ) -> dict:
+        """Validates a utility meter number against a specific DisCo company code."""
+        url = f"{self.base_url}/bills/electricity/verify/"
+        payload = {
+            "company": company.lower().strip(),
+            "meter_no": str(meter_no).strip(),
+            "meter_type": meter_type.lower().strip(),
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                response = await client.post(url, headers=self.headers, json=payload)
+                return response.json()
+            except Exception as e:
+                logger.error(f"🚨 Meter verification exception: {e}")
+                return {"success": False, "message": str(e)}
+
+    async def vend_electricity(
+        self,
+        company: str,
+        meter_no: str,
+        meter_type: str,
+        phone_number: str,
+        amount: int,
+        customer_name: str,
+    ) -> dict:
+        """Executes the final electricity token purchase payload."""
+        url = f"{self.base_url}/bills/electricity/pay/"
+        payload = {
+            "company": company.lower().strip(),
+            "meter_no": str(meter_no).strip(),
+            "meter_type": meter_type.lower().strip(),
+            "phone_number": phone_number,
+            "amount": amount,
+            "Customer_name": customer_name,  # Matches the capitalized key convention
+            "pin": self.bigi_transaction_pin,
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.post(url, headers=self.headers, json=payload)
+                return response.json()
+            except Exception as e:
+                logger.error(f"🚨 Electricity vending exception: {e}")
+                return {"success": False, "message": str(e)}
 
 
 # Instantiating single global object machine for use across system layers

@@ -4,17 +4,26 @@ from src.schemas.telegram import TelegramWebhookInput
 from src.schemas.enums import OnboardingState, UserLang
 from typing import Annotated
 import re
+import redis.asyncio as aioredis
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 # internal imports
+from src.services.data_ux_handler import (
+    process_data_ux_routing,
+    generate_plan_selection_buttons,
+)
 from src.database.db_conn import get_db
 from src.models.identity import UserIdentity
 from src.models.profile import Profile
 from src.utils.tag_generator import tag_generator
-from src.utils.responses import ONBOARDING_RESPONSES
+from src.utils.responses import (
+    ONBOARDING_RESPONSES,
+    TRANSACTION_RESPONSES,
+    DATA_RESPONSES,
+)
 from src.services.nlu_engine import (
     classify_intent,
     extract_airtime_slots,
@@ -25,15 +34,103 @@ from src.services.nlu_engine import (
     extract_education_slots,
     extract_isp_slots,
 )
+from src.services.telegram import telegram_client, logger
 
 router = APIRouter()
+# setting up redis connection for caching
+redis_pool = aioredis.ConnectionPool(
+    host="localhost", port=6379, db=0, decode_response=True
+)
+redis_client = aioredis.Redis(connection_pool=redis_pool)
+
+
+async def handle_inline_callbacks(update: dict, db: AsyncSession):
+    """Internal processor for inline keyword button clicks."""
+    callback_dict = update.get("callback_query", {})
+    click_data = callback_dict.get("data", "")
+    chat_id = callback_dict.get("message", {}).get("chat", {}).get("id")
+    message_id = callback_dict.get("message", {}).get("message_id")
+
+    user_lang = "english"
+
+    if not click_data:
+        return {"status": "ignored"}
+
+    if click_data.startswith("data_net_view:"):
+        _, network, category = click_data.split(":")
+        menu_res = await generate_plan_selection_buttons(
+            db, user_lang, network, category
+        )
+        await telegram_client.edit_message_text(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": menu_res["text"],
+                "parse_mode": "Markdown",
+                "reply_markup": menu_res["reply_markup"],
+            }
+        )
+        return {"status": "ok"}
+
+    elif click_data.startswith("data_back_to_net:"):
+        _, network = click_data.split(":")
+        menu_res = await process_data_ux_routing(db, user_lang, None, network, None)
+        await telegram_client.edit_message_text(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": menu_res["text"],
+                "parse_mode": "Markdown",
+                "reply_markup": menu_res["reply_markup"],
+            }
+        )
+        return {"status": "ok"}
+
+    elif click_data == "action_cancel":
+        cancel_msg = "❌ Transaction cancelled safely. Let me know if you need anything else, boss!"
+        await telegram_client.edit_message_text(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": cancel_msg,
+            }
+        )
+        return {"status": "ok"}
+
+    return {"status": "unhandled_callback"}
 
 
 @router.post("", status_code=status.HTTP_200_OK)
-async def telegram_webhook(
-    payload: TelegramWebhookInput, db: Annotated[AsyncSession, Depends(get_db)]
-):
+async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get_db)]):
+    update_id = update.get("update_id")
+    if update_id:
+        lock_key = f"tg_lock:{update_id}"
+        is_duplicate = await redis_client.get(lock_key)
+        if is_duplicate:
+            logger.info(
+                f"🛡️ [Idempotency Guard] Dropped duplicate update_id: {update_id}"
+            )
+            return {"status": "dublicated_and_dropped"}
+        # processing lock with a 5-minute self-cleansing timeout
+        await redis_client.set(lock_key, "processing", ex=300)
+    if "callback_query" in update:
+        return await handle_inline_callbacks(update, db)
+
+    if "message" not in update:
+        return {"status": "ignored", "reason": "non-message event"}
+
+    try:
+        payload = TelegramWebhookInput.model_validate(update)
+    except Exception as e:
+        return {"status": "error", "detail": f"Schema parsing error: {e}"}
+
     telegramuser_id = payload.message.message_from.id
+    chat_id = payload.message.chat.id
+    # 🛠️ Sending immediate interactive feedback to mask network or NLU delays
+    try:
+        await telegram_client.send_chat_action(chat_id=chat_id, action="typing")
+    except Exception as e:
+        logger.warning(f"Failed to trigger typing indicator packet: {e}")
 
     stmt = (
         select(UserIdentity)
@@ -49,7 +146,6 @@ async def telegram_webhook(
     if existing_user:
         profile = existing_user.profile
 
-        # FIX: Force .lower() to safely map onto lowercase Enum schemas
         try:
             db_state = (
                 profile.user_state.lower()
@@ -61,47 +157,33 @@ async def telegram_webhook(
             profile_state = OnboardingState.AWAITING_LANGUAGE
 
         user_message = (payload.message.text or "").strip()
-
-        # Resolve user language context cleanly
         user_lang = profile.lang or "english"
         copy_text = ONBOARDING_RESPONSES.get(user_lang, ONBOARDING_RESPONSES["english"])
 
         if not user_message and not payload.message.contact:
-            return {
-                "success": 200,
-                "status": "ignored",
-                "reasons": "empty messages can't be processed",
-            }
+            return {"success": 200, "status": "ignored"}
 
         # ========================================================
         # STEP 1: ACTIVE STATE PROGRESSION GATEKEEPER
         # ========================================================
-
-        # Condition A: Awaiting Language Input
         if profile_state == OnboardingState.AWAITING_LANGUAGE:
             cleaned_input = user_message.lower()
             if cleaned_input not in ["english", "pidgin", "hausa"]:
-                return {
-                    "success": 200,
-                    "status": "onboarding_error",
-                    "message": copy_text["invalid_lang"],
-                }
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": copy_text["invalid_lang"]}
+                )
+                return {"success": 200, "message": copy_text["invalid_lang"]}
 
-            # Save selection and transition state
             profile.lang = cleaned_input
             profile.user_state = OnboardingState.AWAITING_PHONE.value
             await db.commit()
 
-            # Resolve copy with the newly specified language immediately
             new_copy = ONBOARDING_RESPONSES[cleaned_input]
-            return {
-                "success": 200,
-                "status": "onboarding_progress",
-                "steps": "phone_number_request",
-                "message": new_copy["ask_phone"],
-            }
+            await telegram_client.send_message(
+                {"chat_id": chat_id, "text": new_copy["ask_phone"]}
+            )
+            return {"success": 200, "message": new_copy["ask_phone"]}
 
-        # Condition B: Awaiting Phone Number
         elif profile_state == OnboardingState.AWAITING_PHONE:
             if payload.message.contact and payload.message.contact.phone_number:
                 phone = payload.message.contact.phone_number
@@ -112,108 +194,113 @@ async def telegram_webhook(
             profile.user_state = OnboardingState.AWAITING_BVN.value
             await db.commit()
 
-            return {
-                "success": 200,
-                "status": "onboarding_progress",
-                "steps": "bvn_verification",
-                "message": copy_text["ask_bvn"],
-            }
+            await telegram_client.send_message(
+                {"chat_id": chat_id, "text": copy_text["ask_bvn"]}
+            )
+            return {"success": 200, "message": copy_text["ask_bvn"]}
 
-        # Condition C: Awaiting 11-digit BVN
         elif profile_state == OnboardingState.AWAITING_BVN:
             clean_bvn = re.sub(r"\D", "", user_message)
             if len(clean_bvn) != 11:
-                return {
-                    "success": 200,
-                    "status": "onboarding_error",
-                    "message": copy_text["invalid_bvn"],
-                }
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": copy_text["invalid_bvn"]}
+                )
+                return {"success": 200, "message": copy_text["invalid_bvn"]}
 
             profile.bnv = clean_bvn
             profile.user_state = OnboardingState.AWAITING_PIN.value
             await db.commit()
 
-            return {
-                "success": 200,
-                "status": "onboarding_progress",
-                "steps": "transaction_pin_creation",
-                "message": copy_text["ask_pin"],
-            }
+            await telegram_client.send_message(
+                {"chat_id": chat_id, "text": copy_text["ask_pin"]}
+            )
+            return {"success": 200, "message": copy_text["ask_pin"]}
 
-        # Condition D: Awaiting Initial Pin Setup
         elif profile_state == OnboardingState.AWAITING_PIN:
             clean_pin = re.sub(r"\D", "", user_message)
             if len(clean_pin) != 4:
-                return {
-                    "success": 200,
-                    "status": "onboarding_error",
-                    "message": copy_text["invalid_pin"],
-                }
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": copy_text["invalid_pin"]}
+                )
+                return {"success": 200, "message": copy_text["invalid_pin"]}
 
             profile.hash_pin = clean_pin
             profile.user_state = OnboardingState.AWAITING_PIN_CONFIRMATION.value
             await db.commit()
 
-            return {
-                "success": 200,
-                "status": "onboarding_progress",
-                "steps": "transaction_pin_confirmation",
-                "message": copy_text["confirm_pin"],
-            }
+            await telegram_client.send_message(
+                {"chat_id": chat_id, "text": copy_text["confirm_pin"]}
+            )
+            return {"success": 200, "message": copy_text["confirm_pin"]}
 
-        # Condition E: Confirming Pin Matching Values
         elif profile_state == OnboardingState.AWAITING_PIN_CONFIRMATION:
             clean_pin = re.sub(r"\D", "", user_message)
-
             if clean_pin != profile.hash_pin:
                 profile.user_state = OnboardingState.AWAITING_PIN.value
                 profile.hash_pin = None
                 await db.commit()
-                return {
-                    "success": 200,
-                    "status": "onboarding_error",
-                    "message": copy_text["mismatch_pin"],
-                }
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": copy_text["mismatch_pin"]}
+                )
+                return {"success": 200, "message": copy_text["mismatch_pin"]}
 
             profile.user_state = OnboardingState.COMPLETED.value
             await db.commit()
 
-            return {
-                "success": 200,
-                "status": "onboarding_complete",
-                "message": copy_text["completed"],
-            }
+            await telegram_client.send_message(
+                {"chat_id": chat_id, "text": copy_text["completed"]}
+            )
+            return {"success": 200, "message": copy_text["completed"]}
 
         # ========================================================
         # STEP 2: FULL TRANSACTION ENGINE (Only hits if COMPLETED)
         # ========================================================
         elif profile_state == OnboardingState.COMPLETED:
             nlu_analysis = await classify_intent(user_message)
-            # Pull dynamic localized text dictionaries
-            from src.utils.responses import TRANSACTION_RESPONSES
+            logger.info(
+                f"🧠 [NLU Intent Engine] Action Classified: '{nlu_analysis.action}' | Raw Text: '{user_message}'"
+            )
 
             tx_copy = TRANSACTION_RESPONSES.get(
                 user_lang, TRANSACTION_RESPONSES["english"]
             )
+            action_str = str(nlu_analysis.action).lower()
 
-            extracted_slots = None
-            if nlu_analysis.action == "airtime_purchase":
+            # 🛠️ GREETING GATEWAY: Catch common greetings or greeting intent labels instantly
+            if action_str in [
+                "greeting",
+                "general_greeting",
+                "intentenum.greeting",
+            ] or user_message.lower() in [
+                "hi",
+                "hello",
+                "hey",
+                "yo",
+                "sup",
+                "barka",
+                "sannu",
+            ]:
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": tx_copy["greeting"]}
+                )
+                return {"success": 200, "message": tx_copy["greeting"]}
+
+            elif "airtime" in action_str:
                 extracted_slots = await extract_airtime_slots(user_message)
                 if (
                     not extracted_slots
                     or not extracted_slots.amount
                     or not extracted_slots.network
                 ):
-                    return {
-                        "success": 200,
-                        "status": "transaction_error",
-                        "message": tx_copy["missing_slots"],
-                    }
+                    await telegram_client.send_message(
+                        {"chat_id": chat_id, "text": tx_copy["missing_slots"]}
+                    )
+                    return {"success": 200, "message": tx_copy["missing_slots"]}
 
                 target_phone = extracted_slots.phone_number or profile.phone_num
                 req_amount = int(extracted_slots.amount)
                 req_network = extracted_slots.network
-                # Execute our shared ledger guard infrastructure safely
+
                 from src.utils.ledger_guard import initialize_local_ledger
                 from src.models.transaction import TransactionType, TransactionStatus
 
@@ -227,75 +314,128 @@ async def telegram_webhook(
                 )
 
                 if not cleared:
-                    # Formats local copy using localized dictionary parameter replacements
-                    return {
-                        "success": 200,
-                        "status": "insufficient_funds",
-                        "message": tx_copy["insufficient_funds"].format(
-                            balance=profile.user_wallet or 0.0
-                        ),
-                    }
+                    insufficient_msg = tx_copy["insufficient_funds"].format(
+                        balance=profile.user_wallet or 0.0
+                    )
+                    await telegram_client.send_message(
+                        {"chat_id": chat_id, "text": insufficient_msg}
+                    )
+                    return {"success": 200, "message": insufficient_msg}
 
-                # ⚡ Execute Non-Blocking Vendor Handshake Loop
                 from src.services.bigisub import bigisub_client
 
                 vending_res = await bigisub_client.vend_airtime(
                     phone=target_phone, amount=req_amount, network=req_network
                 )
+                # current_lock = f"tg_lock:{payload.update_id}"
 
                 if vending_res.get("success") is True:
                     local_tx.status = TransactionStatus.SUCCESSFUL
                     local_tx.reference = vending_res.get("transaction_id")
                     await db.commit()
+                    # mark the lock as sucess to avoid reprocessing
+                    await redis_client.set(lock_key, "success", ex=300)
 
-                    return {
-                        "success": 200,
-                        "status": "transaction_successful",
-                        "message": tx_copy["vending_success"].format(
-                            amount=req_amount,
-                            provider=req_network,
-                            recipient=target_phone,
-                        ),
-                    }
+                    success_msg = tx_copy["vending_success"].format(
+                        amount=req_amount, provider=req_network, recipient=target_phone
+                    )
+                    await telegram_client.send_message(
+                        {"chat_id": chat_id, "text": success_msg}
+                    )
+                    return {"success": 200, "message": success_msg}
                 else:
-                    # Rollback ledger state modifications instantly if vendor drops execution
                     profile.user_wallet = float(profile.user_wallet) + req_amount
                     local_tx.status = TransactionStatus.FAILED
                     await db.commit()
+                    # mark the lock as failed to avoid reprocessing
+                    await redis_client.set(lock_key, "failed", ex=300)
 
-                    return {
-                        "success": 200,
-                        "status": "vendor_error",
-                        "message": tx_copy["vending_failed"].format(
-                            error=vending_res.get("error")
-                        ),
-                    }
+                    failed_msg = tx_copy["vending_failed"].format(
+                        error=vending_res.get("error")
+                    )
+                    await telegram_client.send_message(
+                        {"chat_id": chat_id, "text": failed_msg}
+                    )
+                    return {"success": 200, "message": failed_msg}
 
-            elif nlu_analysis.action == "data_purchase":
+            elif "data" in action_str:
                 extracted_slots = await extract_datapurchase_slots(user_message)
-            elif nlu_analysis.action == "betting_payment":
-                extracted_slots = await extract_betting_slots(user_message)
-            elif nlu_analysis.action == "cabletv_payment":
-                extracted_slots = await extract_cabletv_slots(user_message)
-            elif nlu_analysis.action == "electricity_payment":
-                extracted_slots = await extract_electricity_slots(user_message)
-            elif nlu_analysis.action == "education_payment":
-                extracted_slots = await extract_education_slots(user_message)
-            elif nlu_analysis.action == "isp_payment":
-                extracted_slots = await extract_isp_slots(user_message)
+                extracted_net = (
+                    extracted_slots.network.value
+                    if extracted_slots and extracted_slots.network
+                    else None
+                )
+                extracted_size = extracted_slots.size if extracted_slots else None
+                extracted_amt = extracted_slots.amount if extracted_slots else None
+                target_phone = (
+                    extracted_slots.phone_number
+                    if extracted_slots and extracted_slots.phone_number
+                    else profile.phone_num
+                )
 
-            return {
-                "success": 200,
-                "status": "user is verified and active",
-                "profile_id": existing_user.profile_id,
-                "intent_analysis": nlu_analysis.model_dump(),
-                "extracted_slots": (
-                    extracted_slots.model_dump() if extracted_slots else None
-                ),
-            }
+                ux_response = await process_data_ux_routing(
+                    db=db,
+                    user_lang=user_lang,
+                    phone_number=target_phone,
+                    extracted_network=extracted_net,
+                    extracted_size=extracted_size,
+                    extracted_amount=float(extracted_amt) if extracted_amt else None,
+                )
+
+                payload_data = {
+                    "chat_id": chat_id,
+                    "text": ux_response["text"],
+                    "parse_mode": "Markdown",
+                }
+                if ux_response.get("reply_markup"):
+                    payload_data["reply_markup"] = ux_response["reply_markup"]
+
+                await telegram_client.send_message(payload_data)
+                return {"status": "ok"}
+
+            elif "betting" in action_str:
+                extracted_slots = await extract_betting_slots(user_message)
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": tx_copy["coming_soon"]}
+                )
+                return {"success": 200, "message": tx_copy["coming_soon"]}
+
+            elif "cabletv" in action_str or "cable" in action_str:
+                extracted_slots = await extract_cabletv_slots(user_message)
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": tx_copy["coming_soon"]}
+                )
+                return {"success": 200, "message": tx_copy["coming_soon"]}
+
+            elif "electricity" in action_str:
+                extracted_slots = await extract_electricity_slots(user_message)
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": tx_copy["coming_soon"]}
+                )
+                return {"success": 200, "message": tx_copy["coming_soon"]}
+
+            elif "education" in action_str:
+                extracted_slots = await extract_education_slots(user_message)
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": tx_copy["coming_soon"]}
+                )
+                return {"success": 200, "message": tx_copy["coming_soon"]}
+
+            elif "isp" in action_str:
+                extracted_slots = await extract_isp_slots(user_message)
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": tx_copy["coming_soon"]}
+                )
+                return {"success": 200, "message": tx_copy["coming_soon"]}
+
+            else:
+                fallback_msg = tx_copy["fallback_safety"]
+                await telegram_client.send_message(
+                    {"chat_id": chat_id, "text": fallback_msg, "parse_mode": "Markdown"}
+                )
+                return {"success": 200, "message": fallback_msg}
 
     else:
-        # User not found logic - triggers initial row initialization
         firstName = payload.message.message_from.first_name
         lastName = payload.message.message_from.username or "Padi"
         new_tag = tag_generator(firstname=firstName, lastname=lastName)
@@ -309,23 +449,16 @@ async def telegram_webhook(
         )
         db.add(new_profile)
         await db.flush()
-        generated_profile_id = new_profile.id
 
         new_identity = UserIdentity(
             platform="Telegram",
             platform_id=str(telegramuser_id),
-            profile_id=generated_profile_id,
+            profile_id=new_profile.id,
         )
         db.add(new_identity)
         await db.commit()
 
         init_copy = ONBOARDING_RESPONSES["english"]["ask_lang"]
+        await telegram_client.send_message({"chat_id": chat_id, "text": init_copy})
 
-        return {
-            "success": 201,
-            "status": "user created successfully",
-            "profile_id": generated_profile_id,
-            "email": new_profile.email,
-            "user_tag": new_tag,
-            "message": init_copy,
-        }
+        return {"success": 201, "message": init_copy}

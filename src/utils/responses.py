@@ -41,31 +41,97 @@ ONBOARDING_RESPONSES = {
 
 TRANSACTION_RESPONSES = {
     "english": {
-        "greeting": "Hello Padi! 👋 How can I help you today? You can tell me to buy airtime, purchase data, or handle your bills naturally!",
-        "missing_slots": "❌ Details incomplete. Please specify the provider, amount, and phone number clearly.",
-        "insufficient_funds": "❌ Transaction failed. Insufficient funds. Your current wallet balance is ₦{balance}.",
-        "vending_success": "🎉 Success! ₦{amount} {provider} airtime has been sent to {recipient}.",
-        "vending_failed": "❌ Failed: {error}",
+        "greeting": "Welcome back, Boss! 🦾\nWhat bills are we taking care of today? Tap an option below or just talk to me naturally!",
+        "greeting_markup": {
+            "inline_keyboard": [
+                [
+                    {"text": "📱 Buy Airtime", "callback_data": "menu_airtime"},
+                    {"text": "📶 Buy Data", "callback_data": "data_back_to_net:mtn"},
+                ],
+                [
+                    {
+                        "text": "💡 Electricity Token",
+                        "callback_data": "menu_electricity",
+                    },
+                    {"text": "📺 Cable TV", "callback_data": "menu_cable"},
+                ],
+                [
+                    {"text": "⚽ Sports Betting", "callback_data": "menu_betting"},
+                    {"text": "💬 Type other bills", "callback_data": "action_cancel"},
+                ],
+            ]
+        },
+        "airtime_prompt": "📱 *Airtime Vending Mode*\n\nPlease enter the phone number and amount you wish to purchase (e.g., _Send 500 airtime to 08012345678_).",
+        "data_prompt": "📶 *Data Vending Mode*\n\nPlease select your provider network from the options or type the explicit bundle allocation you need.",
+        "electricity_prompt": "💡 *Electricity Payment Mode*\n\nPlease provide your distribution company name, meter number, and the amount (e.g., _Pay 5000 naira for IKEDC prepaid meter 123456789_).",
+        "cable_prompt": "📺 *Cable TV Subscription Mode*\n\nPlease enter your decoder details, package type, and smartcard registration number.",
+        "betting_prompt": "⚽ *Betting Wallet Funding Mode*\n\nPlease state your preferred betting company ID reference along with your payment tier details.",
+        "missing_slots": "An issue popped up while processing that. Please check that you provided the phone number, correct network provider name, and transaction amount clearly!",
+        "insufficient_funds": "🪙 Your balance is running low! Your current wallet balance sits at ₦{balance}. Kindly top up your profile account to complete this trade seamlessly.",
+        "vending_success": "🎉 Transaction complete! ₦{amount} {provider} recharge has been successfully applied to target line {recipient}.",
+        "vending_failed": "⚠️ We couldn't complete this request right now because the provider gateway reported a service constraint. Please try again shortly or modify your parameters.",
         "coming_soon": "⚡ This bill payment feature is coming soon to MyPadi! Stay tuned.",
         "fallback_safety": "I couldn't quite map that request to a bill, Padi. You can tell me to *'buy MTN airtime'* or *'recharge data'* naturally, and I'll handle it!",
     },
     "pidgin": {
-        "greeting": "Moni o Padi! 👋 How far? Wetin we dey run today? You fit tell me to buy airtime, data, or pay bills normal-normal!",
-        "missing_slots": "❌ Dis details no complete. Abeg tell me the network, how much, and phone number well.",
-        "insufficient_funds": "❌ Your money no reach. Your wallet balance na ₦{balance}.",
-        "vending_success": "🎉 E don go! We don send ₦{amount} {provider} airtime to {recipient}.",
-        "vending_failed": "❌ Error happen: {error}",
+        "greeting": "Welcome back, Boss! 🦾\nWhich bills we dey run today? Select from the options down or just tell me wetin you want!",
+        "greeting_markup": {
+            "inline_keyboard": [
+                [
+                    {"text": "📱 Buy Airtime", "callback_data": "menu_airtime"},
+                    {"text": "📶 Buy Data", "callback_data": "data_back_to_net:mtn"},
+                ],
+                [
+                    {"text": "💡 Light Token", "callback_data": "menu_electricity"},
+                    {"text": "📺 Cable TV", "callback_data": "menu_cable"},
+                ],
+                [
+                    {"text": "⚽ Betting Wallet", "callback_data": "menu_betting"},
+                    {"text": "💬 Type other bills", "callback_data": "action_cancel"},
+                ],
+            ]
+        },
+        "airtime_prompt": "📱 *Airtime Vending Mode*\n\nAbeg enter the phone number and how much you wan buy (e.g., _Send 500 airtime to 08012345678_).",
+        "data_prompt": "📶 *Data Vending Mode*\n\nSelect your network provider or type wetin you wan purchase clear clear.",
+        "electricity_prompt": "💡 *Electricity Payment Mode*\n\nAbeg drop your company code, meter number, and the amount (e.g., _Pay 5000 naira for IKEDC prepaid meter 123456789_).",
+        "cable_prompt": "📺 *Cable TV Subscription Mode*\n\nTell me your decoder company, package name, and smartcard number make we run am.",
+        "betting_prompt": "⚽ *Betting Wallet Funding Mode*\n\nDrop your betting user ID plus the amount make we fund your account sharply.",
+        "missing_slots": "Something miss inside details wey you send, boss! Check well make sure network, phone number, and how much dey inside properly.",
+        "insufficient_funds": "🪙 Your money no reach this level, boss. Your wallet balance na ₦{balance}. Abeg fund your pocket make we try again.",
+        "vending_success": "🎉 E don go successfully! We don wire ₦{amount} {provider} airtime directly to {recipient}.",
+        "vending_failed": "⚠️ Gateway network error happen from provider side. Your wallet money intact, abeg chill small or try another provider tier.",
         "coming_soon": "⚡ This bill payment feature dey come soon on MyPadi! Abeg stay tuned.",
         "fallback_safety": "Boss, I no match that bill request clear-clear. You fit tell me *'buy MTN airtime'* or *'recharge data'* normal-normal, and I go run am sharp-sharp! ⚡",
     },
     "hausa": {
-        "greeting": "Sannu Padi! 👋 Yaya dai? Wace lissafin kuke son biya yau? Za ku iya siyan airtime, data, ko biyan kuɗi a sauƙaƙe!",
-        "missing_slots": "❌ Cikakken bayani bai cika ba. Da fatan za a fadi hanyar sadarwa, adadin kudi, da lambar waya.",
-        "insufficient_funds": "❌ Kudinka bai isa ba. Ma'ajin ku shine ₦{balance}.",
+        "greeting": "Sannu Padi! 👋 Yaya dai? Wace lissafin kuke son biya yau? Za ku iya zaɓar zaɓi a ƙasa ko kuyi magana dani!",
+        "greeting_markup": {
+            "inline_keyboard": [
+                [
+                    {"text": "📱 Sayi Airtime", "callback_data": "menu_airtime"},
+                    {"text": "📶 Tura Data", "callback_data": "data_back_to_net:mtn"},
+                ],
+                [
+                    {"text": "💡 Wutar Lantarki", "callback_data": "menu_electricity"},
+                    {"text": "📺 Cable TV", "callback_data": "menu_cable"},
+                ],
+                [
+                    {"text": "⚽ Betting", "callback_data": "menu_betting"},
+                    {"text": "💬 Rubuta sauran kuɗi", "callback_data": "action_cancel"},
+                ],
+            ]
+        },
+        "airtime_prompt": "📱 *Tsarin Airtime*\n\nDa fatan za a shigar da lambar waya da adadin da kuke son saya (misali, _Send 500 airtime to 08012345678_).",
+        "data_prompt": "📶 *Tsarin Data*\n\nZaɓi hanyar sadarwa ko rubuta adadin da kuke buƙata sarai.",
+        "electricity_prompt": "💡 *Tsarin Wutar Lantarki*\n\nDa fatan za a bayar da sunan kamfani, lambar mita, da adadin kuɗi (misali, _Pay 5000 naira for IKEDC prepaid meter 123456789_).",
+        "cable_prompt": "📺 *Tsarin Cable TV*\n\nShigar da bayanan akwatin ku, nau'in fakiti, da lambar katin ku.",
+        "betting_prompt": "⚽ *Tsarin Betting*\n\nShigar da ID na kamfanin betting ɗin ku tare da adadin kuɗi.",
+        "missing_slots": "❌ Cikakken bayani bai cika ba. Da fatan za a sake dubawa hanyar sadarwa, adadin kudi, da lambar waya.",
+        "insufficient_funds": "🪙 Kuɗin ku bai isa ba! Ma'ajin ku na yanzu shine ₦{balance}. Da fatan za a saka kuɗi don ci gaba.",
         "vending_success": "🎉 An yi nasara! An tura ₦{amount} {provider} zuwa {recipient}.",
-        "vending_failed": "❌ Kuskure: {error}",
+        "vending_failed": "⚠️ An sami matsala daga kamfanin sadarwa. Da fatan za a sake gwadawa nan ba da jimawa ba.",
         "coming_soon": "⚡ Wannan fasalin biyan kuɗi yana zuwa kwanan nan akan MyPadi! Kasance tare da mu.",
-        "fallback_safety": "Ban gane wannan bukatar biyan kuɗi ba sarai. Kuna iya gaya mani *'sayi airtime na MTN'* ko *'sami data'* a sauƙaƙe, kuma zan tura muku da wuri! ⚡",
+        "fallback_safety": "Ban gane wannan bukatar biyan kuɗi ba sarai. Kuna iya gaya mani *'sayi airtime na MTN'* ko *'sami data'* a sauƙaƙe! ⚡",
     },
 }
 

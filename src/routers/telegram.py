@@ -39,7 +39,7 @@ from src.services.telegram import telegram_client, logger
 router = APIRouter()
 # setting up redis connection for caching
 redis_pool = aioredis.ConnectionPool(
-    host="localhost", port=6379, db=0, decode_response=True
+    host="localhost", port=6379, db=0, decode_responses=True, protocol=2
 )
 redis_client = aioredis.Redis(connection_pool=redis_pool)
 
@@ -50,11 +50,28 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
     click_data = callback_dict.get("data", "")
     chat_id = callback_dict.get("message", {}).get("chat", {}).get("id")
     message_id = callback_dict.get("message", {}).get("message_id")
-
-    user_lang = "english"
+    telegramuser_id = callback_dict.get("from", {}).get("id")
 
     if not click_data:
         return {"status": "ignored"}
+
+    # Dynamic user profile language lookup layer
+    user_lang = "english"
+    stmt = (
+        select(Profile)
+        .join(UserIdentity)
+        .where(
+            UserIdentity.platform_id == str(telegramuser_id),
+            UserIdentity.platform == "Telegram",
+        )
+    )
+    res = await db.execute(stmt)
+    profile = res.scalars().first()
+    if profile and profile.lang:
+        user_lang = profile.lang.lower()
+
+    # Load matching translation copy
+    tx_copy = TRANSACTION_RESPONSES.get(user_lang, TRANSACTION_RESPONSES["english"])
 
     if click_data.startswith("data_net_view:"):
         _, network, category = click_data.split(":")
@@ -86,14 +103,45 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
         )
         return {"status": "ok"}
 
-    elif click_data == "action_cancel":
-        cancel_msg = "❌ Transaction cancelled safely. Let me know if you need anything else, boss!"
+    # Dynamic localized menu routes setup
+    elif click_data == "menu_airtime":
         await telegram_client.edit_message_text(
             {
                 "chat_id": chat_id,
                 "message_id": message_id,
-                "text": cancel_msg,
+                "text": tx_copy["airtime_prompt"],
+                "parse_mode": "Markdown",
             }
+        )
+        return {"status": "ok"}
+
+    elif click_data == "menu_electricity":
+        await telegram_client.edit_message_text(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": tx_copy["electricity_prompt"],
+                "parse_mode": "Markdown",
+            }
+        )
+        return {"status": "ok"}
+
+    elif click_data in ["menu_cable", "menu_betting"]:
+        key_target = "cable_prompt" if click_data == "menu_cable" else "betting_prompt"
+        await telegram_client.edit_message_text(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": tx_copy[key_target],
+                "parse_mode": "Markdown",
+            }
+        )
+        return {"status": "ok"}
+
+    elif click_data == "action_cancel":
+        cancel_msg = "❌ Operation closed cleanly. Let me know whenever you're ready to run another trade, boss!"
+        await telegram_client.edit_message_text(
+            {"chat_id": chat_id, "message_id": message_id, "text": cancel_msg}
         )
         return {"status": "ok"}
 
@@ -110,7 +158,7 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
             logger.info(
                 f"🛡️ [Idempotency Guard] Dropped duplicate update_id: {update_id}"
             )
-            return {"status": "dublicated_and_dropped"}
+            return {"status": "duplicated_and_dropped"}
         # processing lock with a 5-minute self-cleansing timeout
         await redis_client.set(lock_key, "processing", ex=300)
     if "callback_query" in update:
@@ -280,10 +328,21 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
                 "barka",
                 "sannu",
             ]:
-                await telegram_client.send_message(
-                    {"chat_id": chat_id, "text": tx_copy["greeting"]}
-                )
-                return {"success": 200, "message": tx_copy["greeting"]}
+
+                greeting_text = tx_copy["greeting"]
+                greeting_markup = tx_copy.get(
+                    "greeting_markup"
+                )  # Fetch the button layout safely
+
+                payload_data = {
+                    "chat_id": chat_id,
+                    "text": greeting_text,
+                    "parse_mode": "Markdown",
+                }
+                if greeting_markup:
+                    payload_data["reply_markup"] = greeting_markup
+                await telegram_client.send_message(payload_data)
+                return {"success": 200, "message": greeting_text}
 
             elif "airtime" in action_str:
                 extracted_slots = await extract_airtime_slots(user_message)
@@ -350,9 +409,7 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
                     # mark the lock as failed to avoid reprocessing
                     await redis_client.set(lock_key, "failed", ex=300)
 
-                    failed_msg = tx_copy["vending_failed"].format(
-                        error=vending_res.get("error")
-                    )
+                    failed_msg = tx_copy["vending_failed"]
                     await telegram_client.send_message(
                         {"chat_id": chat_id, "text": failed_msg}
                     )

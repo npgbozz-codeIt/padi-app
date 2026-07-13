@@ -56,6 +56,22 @@ class TelegramBotClient:
                 logger.error(f"🚨 [Telegram API Edit Exception]: {e}")
                 return False
 
+    async def send_chat_action(self, chat_id: int, action: str = "typing") -> bool:
+        """
+        Triggers a chat state visibility packet (e.g., 'typing', 'uploading_document')
+        directly down Telegram's network pipes to improve perceived latency.
+        """
+        url = f"{self.base_url}/sendChatAction"
+        payload = {"chat_id": chat_id, "action": action}
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            try:
+                response = await client.post(url, json=payload)
+                return response.status_code == 200
+            except Exception as e:
+                logger.error(f"🚨 [Telegram API ChatAction Exception]: {e}")
+                return False
+
 
 # Instantiate clean singleton instance
 telegram_client = TelegramBotClient()

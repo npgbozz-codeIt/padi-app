@@ -11,6 +11,8 @@ import src.services.conversions
 from src.database.db_conn import engine, AsyncSessionLocal
 from src.models.base import Base
 from src.routers.telegram import router as telegram_router
+from src.routers.paystack_webhook import router as paystack_webhook_router
+
 from src.services.plan_sync import sync_data_plans_to_db
 
 
@@ -56,6 +58,7 @@ async def lifespan(app: FastAPI):
 
 # 3. App Initialization
 app = FastAPI(lifespan=lifespan, title="MyPadi Chatbot API", version="1.0")
+app.include_router(paystack_webhook_router)
 
 app.include_router(
     telegram_router, prefix="/webhook/telegram", tags=["Telegram Webhook"]

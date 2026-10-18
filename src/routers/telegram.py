@@ -14,6 +14,7 @@ from src.database.db_conn import get_db
 from src.models.data_plan import DataPlan
 from src.models.identity import UserIdentity
 from src.models.profile import Profile
+from src.models.transaction import Transaction
 from src.services.data_ux_handler import (
     format_data_size,
     generate_plan_selection_buttons,
@@ -26,6 +27,7 @@ from src.services.state_manager import state_manager
 from src.services.telegram import logger, telegram_client
 from src.services.financial.paystack import PaystackFinancialProvider
 from src.services.handlers.registry import get_vending_handler
+from src.services.transaction_service import TransactionService
 from src.schemas.telegram import TelegramWebhookInput
 from src.utils.responses import TRANSACTION_RESPONSES
 from src.utils.tag_generator import tag_generator
@@ -96,6 +98,57 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
     )
     res = await db.execute(stmt)
     profile = res.scalars().first()
+
+    # -----------------------------------------------------------------
+    # Handle Image Receipt Generation Callback
+    # -----------------------------------------------------------------
+    if click_data.startswith("rx_img:"):
+        reference = click_data.split(":", 1)[1]
+
+        stmt = select(Transaction).where(Transaction.reference == reference)
+        res = await db.execute(stmt)
+        txn = res.scalars().first()
+
+        if not txn:
+            if callback_query_id:
+                try:
+                    await telegram_client.answer_callback_query({
+                        "callback_query_id": callback_query_id,
+                        "text": "❌ Transaction record not found."
+                    })
+                except Exception:
+                    pass
+            return {"status": "error"}
+
+        if callback_query_id:
+            try:
+                await telegram_client.answer_callback_query({
+                    "callback_query_id": callback_query_id,
+                    "text": "🎨 Rendering your high-res receipt..."
+                })
+            except Exception:
+                pass
+
+        try:
+            png_bytes = TransactionService.generate_image_receipt_bytes(txn=txn)
+
+            url_photo = f"{telegram_client.base_url}/sendPhoto"
+            async with httpx.AsyncClient() as client:
+                files = {"photo": ("mypadi_receipt.png", png_bytes.getvalue(), "image/png")}
+                data = {
+                    "chat_id": chat_id,
+                    "caption": f"🧾 *MyPadi Verified Receipt*\nReference: `{txn.reference}`\n_Tap to save to gallery or share!_",
+                    "parse_mode": "Markdown",
+                }
+                await client.post(url_photo, data=data, files=files)
+        except Exception as e:
+            logger.error(f"Failed to generate receipt image: {e}")
+            await telegram_client.send_message({
+                "chat_id": chat_id,
+                "text": f"❌ Could not render image receipt: {e}"
+            })
+
+        return {"status": "ok"}
 
     # Handle PIN Reset Trigger Callback
     if click_data == "trigger_reset_pin":
@@ -740,11 +793,17 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
 
             exec_res = await handler.execute(db=db, profile=profile, slots=slots)
             bot_reply = exec_res.get("message", "Transaction completed.")
-            await telegram_client.send_message({
+            reply_markup = exec_res.get("reply_markup")
+
+            msg_payload = {
                 "chat_id": chat_id,
                 "text": bot_reply,
                 "parse_mode": "Markdown"
-            })
+            }
+            if reply_markup:
+                msg_payload["reply_markup"] = reply_markup
+
+            await telegram_client.send_message(msg_payload)
             return {"success": 200, "result": "pin_authorized_and_executed"}
 
         # -----------------------------------------------------------------

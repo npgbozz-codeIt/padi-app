@@ -1,16 +1,16 @@
 # src/services/handlers/airtime.py
 import re
 from decimal import Decimal
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.transaction import TransactionStatus, TransactionType
+from src.services.bigisub import bigisub_client
 from src.services.handlers.base import BaseVendingHandler
 from src.services.nlu_engine import extract_airtime_slots
-from src.utils.network_detector import detect_network
-from src.utils.ledger_guard import initialize_local_ledger
-from src.models.transaction import TransactionType, TransactionStatus
-from src.services.bigisub import bigisub_client
 from src.services.transaction_service import TransactionService
+from src.utils.ledger_guard import initialize_local_ledger
+from src.utils.network_detector import detect_network
 from src.utils.responses import TRANSACTION_RESPONSES
 
 
@@ -85,7 +85,7 @@ class AirtimeHandler(BaseVendingHandler):
         req_amount = Decimal(str(slots.get("amount", 0)))
         req_network = normalize_network_name(slots.get("network"))
 
-        # Check balance and register ledger entry
+        # Check balance and register ledger entry atomically with Decimal precision
         cleared, local_tx = await initialize_local_ledger(
             db=db,
             profile=profile,
@@ -95,7 +95,7 @@ class AirtimeHandler(BaseVendingHandler):
             provider=req_network,
         )
 
-        if not cleared:
+        if not cleared or not local_tx:
             insufficient_msg = tx_copy["insufficient_funds"].format(
                 balance=profile.user_wallet or Decimal("0.00")
             )
@@ -113,13 +113,25 @@ class AirtimeHandler(BaseVendingHandler):
             local_tx.token_or_details = f"{req_network.upper()} Airtime"
             await db.commit()
 
-            # Generate structured digital receipt
+            # Formatted digital text receipt
             receipt_msg = TransactionService.format_receipt(
                 txn=local_tx,
-                service_label=f"{req_network.upper()} Airtime"
+                service_label=f"{req_network.upper()} Airtime",
             )
 
-            # Fire real-time admin alert
+            # High-resolution image receipt action button
+            receipt_markup = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "🖼️ Download Image Receipt",
+                            "callback_data": f"rx_img:{local_tx.reference}",
+                        }
+                    ]
+                ]
+            }
+
+            # Real-time alert to Admin Telegram
             await TransactionService.dispatch_admin_alert(
                 event_title="Airtime Vended",
                 details={
@@ -127,14 +139,18 @@ class AirtimeHandler(BaseVendingHandler):
                     "Amount": f"₦{req_amount:,.2f}",
                     "Recipient": target_phone,
                     "Network": req_network.upper(),
-                    "Ref": local_tx.reference
+                    "Ref": local_tx.reference,
                 },
-                level="INFO"
+                level="INFO",
             )
 
-            return {"status": "success", "message": receipt_msg}
+            return {
+                "status": "success",
+                "message": receipt_msg,
+                "reply_markup": receipt_markup,
+            }
         else:
-            # Safe refund using Decimal arithmetic
+            # Atomic refund using Decimal arithmetic
             profile.user_wallet = (profile.user_wallet or Decimal("0.00")) + req_amount
             local_tx.status = TransactionStatus.FAILED
             local_tx.balance_after = profile.user_wallet
@@ -149,9 +165,12 @@ class AirtimeHandler(BaseVendingHandler):
                     "Amount": f"₦{req_amount:,.2f}",
                     "Recipient": target_phone,
                     "Network": req_network.upper(),
-                    "Error": failed_reason
+                    "Error": failed_reason,
                 },
-                level="ERROR"
+                level="ERROR",
             )
 
-            return {"status": "error", "message": f"❌ Transaction Failed: {failed_reason}\n\nYour wallet has been refunded."}
+            return {
+                "status": "error",
+                "message": f"❌ Transaction Failed: {failed_reason}\n\nYour wallet has been refunded.",
+            }

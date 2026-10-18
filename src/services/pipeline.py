@@ -55,8 +55,13 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
                 handler = get_vending_handler(intent)
                 if not handler or not db or not profile:
                     return {"status": "error", "message": "Transaction handler or profile context missing."}
+                
                 result = await handler.execute(db=db, profile=profile, slots=slots)
-                return {"status": result.get("status"), "message": result.get("message")}
+                return {
+                    "status": result.get("status"),
+                    "message": result.get("message"),
+                    "reply_markup": result.get("reply_markup"),
+                }
 
             # 2. First-time preference check: Prompt for 5min vs Always if unset
             if profile.pin_mode is None:
@@ -242,7 +247,6 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
         if phone and not is_valid_phone(phone):
             phone = None
 
-        # Do NOT auto-bind to onboarding profile phone; require explicit recipient phone
         target_phone = phone
 
         if network and target_phone and is_valid_phone(target_phone):

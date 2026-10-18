@@ -1,22 +1,28 @@
 # src/services/transaction_service.py
+import io
 import os
 import uuid
+import xml.sax.saxutils as saxutils
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
+
+import resvg_py
 
 from src.models.profile import Profile
 from src.models.transaction import Transaction, TransactionStatus, TransactionType
 from src.services.telegram import logger, telegram_client
 
 ADMIN_CHAT_ID = os.getenv("ADMIN_TELEGRAM_ID")
+TEMPLATE_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "assets", "receipt_template.svg"
+)
 
 
 class TransactionService:
     @staticmethod
     def generate_reference(prefix: str = "MP") -> str:
-        """Generates an 8-character unique reference like MP-AIR-A1B2C3D4."""
         short_id = uuid.uuid4().hex[:8].upper()
         return f"{prefix}-{short_id}"
 
@@ -33,10 +39,6 @@ class TransactionService:
         token_or_details: Optional[str] = None,
         custom_ref: Optional[str] = None,
     ) -> Transaction:
-        """
-        Creates a ledger entry in PostgreSQL, captures balance_after,
-        and commits the record atomically.
-        """
         prefix_map = {
             TransactionType.AIRTIME: "MP-AIR",
             TransactionType.DATA: "MP-DAT",
@@ -75,12 +77,7 @@ class TransactionService:
         service_label: str,
         detail_label: Optional[str] = None,
     ) -> str:
-        """
-        Formats a clean, high-contrast Telegram text receipt with single-tap
-        copyable monospaced code blocks for references, numbers, and tokens.
-        """
         created_time = txn.date_created.strftime("%d %b %Y, %I:%M %p")
-        
         lines = [
             "🧾 *MYPADI TRANSACTION RECEIPT*",
             "──────────────────────────",
@@ -104,8 +101,60 @@ class TransactionService:
             "",
             "_Tap any code block above to copy instantly!_",
         ])
-
         return "\n".join(lines)
+
+    @classmethod
+    def generate_image_receipt_bytes(cls, txn: Transaction) -> io.BytesIO:
+        """
+        Populates receipt_template.svg with transaction data
+        and converts it into high-resolution PNG bytes using Rust-powered resvg.
+        """
+        real_template_path = os.path.abspath(TEMPLATE_PATH)
+        if not os.path.exists(real_template_path):
+            raise FileNotFoundError(f"SVG template missing at: {real_template_path}")
+
+        with open(real_template_path, "r", encoding="utf-8") as f:
+            template = f.read()
+
+        category_title = f"{txn.provider or ''} {txn.tx_type.value.upper()} VEND".strip()
+
+        if txn.tx_type == TransactionType.ELECTRICITY:
+            token_header = "20-DIGIT PREPAID TOKEN (ENTER ON METER)"
+            token_val = txn.token_or_details or "PENDING GENERATION"
+            row1_label = "METER / ACCOUNT"
+        elif txn.tx_type == TransactionType.DATA:
+            token_header = "DATA PLAN FULFILLMENT"
+            token_val = txn.token_or_details or "ACTIVE DATA BUNDLE"
+            row1_label = "RECIPIENT LINE"
+        else:
+            token_header = "FULFILLMENT CONFIRMATION"
+            token_val = "DISPATCHED SUCCESSFULLY"
+            row1_label = "RECIPIENT LINE"
+
+        status_label = "PAID // INSTANT" if txn.status == TransactionStatus.SUCCESSFUL else "FAILED"
+        created_str = txn.date_created.strftime("%d %b %Y // %H:%M:%S")
+
+        replacements = {
+            "{{STATUS_LABEL}}": status_label,
+            "{{AMOUNT}}": f"NGN {txn.amount:,.2f}",
+            "{{SERVICE_CATEGORY}}": category_title,
+            "{{TOKEN_HEADER}}": token_header,
+            "{{TOKEN_VALUE}}": str(token_val),
+            "{{ROW1_LABEL}}": row1_label,
+            "{{ROW1_VALUE}}": str(txn.recipient),
+            "{{PROVIDER_VALUE}}": f"{txn.provider or 'MYPADI'} NETWORK",
+            "{{TIMESTAMP}}": created_str,
+            "{{REFERENCE}}": str(txn.reference),
+        }
+
+        for key, val in replacements.items():
+            safe_val = saxutils.escape(str(val))
+            template = template.replace(key, safe_val)
+
+        png_raw = resvg_py.svg_to_bytes(svg_string=template)
+        png_io = io.BytesIO(bytes(png_raw))
+        png_io.seek(0)
+        return png_io
 
     @staticmethod
     async def dispatch_admin_alert(
@@ -113,9 +162,6 @@ class TransactionService:
         details: dict,
         level: str = "INFO",
     ):
-        """
-        Dispatches real-time internal alerts directly to the Admin Telegram ID.
-        """
         if not ADMIN_CHAT_ID:
             logger.warning("ADMIN_TELEGRAM_ID not set; skipping admin alert dispatch.")
             return

@@ -95,7 +95,7 @@ class DataHandler(BaseVendingHandler):
             provider=network,
         )
 
-        if not cleared:
+        if not cleared or not local_tx:
             return {"status": "error", "message": tx_copy.get("insufficient_funds", "Insufficient wallet balance.")}
 
         vending_res = await bigisub_client.vend_data(
@@ -115,6 +115,17 @@ class DataHandler(BaseVendingHandler):
                 detail_label="Validity & Bundle"
             )
 
+            receipt_markup = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "🖼️ Download Image Receipt",
+                            "callback_data": f"rx_img:{local_tx.reference}"
+                        }
+                    ]
+                ]
+            }
+
             await TransactionService.dispatch_admin_alert(
                 event_title="Data Bundle Vended",
                 details={
@@ -127,7 +138,11 @@ class DataHandler(BaseVendingHandler):
                 level="INFO"
             )
 
-            return {"status": "success", "message": receipt_msg}
+            return {
+                "status": "success",
+                "message": receipt_msg,
+                "reply_markup": receipt_markup
+            }
         else:
             profile.user_wallet = (profile.user_wallet or Decimal("0.00")) + req_amount
             local_tx.status = TransactionStatus.FAILED

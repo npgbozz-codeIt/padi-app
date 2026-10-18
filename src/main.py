@@ -6,7 +6,7 @@ load_dotenv()  # Load environment variables from .env file
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, status
-
+import src.services.conversions
 # Internal database and structure imports
 from src.database.db_conn import engine, AsyncSessionLocal
 from src.models.base import Base

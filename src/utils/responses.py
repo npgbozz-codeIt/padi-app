@@ -46,7 +46,7 @@ TRANSACTION_RESPONSES = {
             "inline_keyboard": [
                 [
                     {"text": "📱 Buy Airtime", "callback_data": "menu_airtime"},
-                    {"text": "📶 Buy Data", "callback_data": "data_back_to_net:mtn"},
+                    {"text": "📶 Buy Data", "callback_data": "menu_data"},
                 ],
                 [
                     {
@@ -79,7 +79,7 @@ TRANSACTION_RESPONSES = {
             "inline_keyboard": [
                 [
                     {"text": "📱 Buy Airtime", "callback_data": "menu_airtime"},
-                    {"text": "📶 Buy Data", "callback_data": "data_back_to_net:mtn"},
+                    {"text": "📶 Buy Data", "callback_data": "menu_data"},
                 ],
                 [
                     {"text": "💡 Light Token", "callback_data": "menu_electricity"},
@@ -109,7 +109,7 @@ TRANSACTION_RESPONSES = {
             "inline_keyboard": [
                 [
                     {"text": "📱 Sayi Airtime", "callback_data": "menu_airtime"},
-                    {"text": "📶 Tura Data", "callback_data": "data_back_to_net:mtn"},
+                    {"text": "📶 Tura Data", "callback_data": "menu_data"},
                 ],
                 [
                     {"text": "💡 Wutar Lantarki", "callback_data": "menu_electricity"},

@@ -11,7 +11,7 @@ class ElectricityTransaction(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     profile_id: Mapped[int] = mapped_column(
-        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("profile.id", ondelete="CASCADE"), nullable=False
     )
 
     # Meter Profile Metrics

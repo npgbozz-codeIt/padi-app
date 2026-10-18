@@ -13,46 +13,66 @@ from src.schemas.enums import (
 )
 
 
-# --- Reusable Coercion Helpers for Instructor/Pydantic ---
 def coerce_to_intent_enum(v):
-    # Converts incoming string tokens perfectly into your Enum instances
     if isinstance(v, str):
-        return IntentEnum(v)
+        try:
+            return IntentEnum(v.lower())
+        except ValueError:
+            pass
     return v
 
 
 def coerce_to_telecom_enum(v):
     if isinstance(v, str):
-        return TelecomProvider(v)
+        try:
+            return TelecomProvider(v.lower())
+        except ValueError:
+            pass
     return v
 
 
 def coerce_to_cabletv_enum(v):
     if isinstance(v, str):
-        return CableTvProvider(v)
+        try:
+            return CableTvProvider(v.lower())
+        except ValueError:
+            pass
     return v
 
 
 def coerce_to_betting_enum(v):
     if isinstance(v, str):
-        return BettingProvider(v)
+        try:
+            return BettingProvider(v.lower())
+        except ValueError:
+            pass
+    return v
 
 
 def coerce_to_education_enum(v):
     if isinstance(v, str):
-        return EducationProvider(v)
+        try:
+            return EducationProvider(v.lower())
+        except ValueError:
+            pass
     return v
 
 
 def coerce_to_isp_enum(v):
     if isinstance(v, str):
-        return IspProvider(v)
+        try:
+            return IspProvider(v.lower())
+        except ValueError:
+            pass
     return v
 
 
 def coerce_to_disco_enum(v):
     if isinstance(v, str):
-        return Disco(v)
+        try:
+            return Disco(v.lower())
+        except ValueError:
+            pass
     return v
 
 
@@ -69,7 +89,7 @@ class IntentClassification(Base):
     )
     reasons: list[str] = Field(
         ...,
-        description="A list of reasons or explanations for the predicted intent, providing insights into the model's decision-making process.",
+        description="A list of reasons or explanations for the predicted intent.",
     )
 
 
@@ -83,15 +103,14 @@ class TelecomClassification(Base):
         ...,
         ge=0.0,
         le=1.0,
-        description="The confidence score of the predicted telecom provider, ranging from 0.0 to 1.0.",
+        description="The confidence score of the predicted telecom provider.",
     )
     reasons: list[str] = Field(
         ...,
-        description="A list of reasons or explanations for the predicted telecom provider, providing insights into the model's decision-making process.",
+        description="A list of reasons or explanations for the predicted telecom provider.",
     )
 
 
-# ====================== nlu shemas for intent extraction=======================
 class AirtimeExtraction(Base):
     amount: Optional[int] = Field(
         None,
@@ -105,7 +124,7 @@ class AirtimeExtraction(Base):
         Optional[TelecomProvider], BeforeValidator(coerce_to_telecom_enum)
     ] = Field(
         None,
-        description="The extracted telecom provider for the airtime purchase, e.g  mtn, airtel or zain , 9mobile or etisalat, glo",
+        description="The extracted telecom provider for the airtime purchase.",
     )
 
 
@@ -128,7 +147,7 @@ class DataExtraction(Base):
         Literal["direct_data", "sme", "nighty", "gifting", "social", "coporate_gifting"]
     ] = Field(
         None,
-        description="The extracted category for the data purchase e.g sme ,gifting, coporate_gifting are usually  cheaper than direct_data.",
+        description="The extracted category for the data purchase e.g. sme, gifting, coporate_gifting.",
     )
 
 
@@ -143,10 +162,9 @@ class CableTvExtraction(Base):
         None,
         description="The extracted cable TV provider for the subscription.",
     )
-
     types: Optional[Literal["renewal", "new_subscription"]] = Field(
         None,
-        description="The extracted subscription type for the cable TV subscription, either 'renewal' or 'new_subscription'.",
+        description="The extracted subscription type for the cable TV subscription.",
     )
 
 
@@ -157,7 +175,7 @@ class ElectricityExtraction(Base):
     )
     company: Annotated[Optional[Disco], BeforeValidator(coerce_to_disco_enum)] = Field(
         None,
-        description="The extracted electricity distribution company (DisCo) provider, matching the official code.",
+        description="The extracted electricity distribution company (DisCo) provider (e.g., aedc, ekedc, ikedc, ibedc, eedc, kedco).",
     )
     meter_no: Optional[str] = Field(
         None,
@@ -169,7 +187,7 @@ class ElectricityExtraction(Base):
     )
     phone_number: Optional[str] = Field(
         None,
-        description="An optional specific recipient phone number extracted from the message to route the token voucher text message.",
+        description="An optional specific recipient phone number extracted from the message.",
     )
 
 

@@ -1,18 +1,26 @@
-# src/services/nlu_engine.py
 import os
+import logging
+from typing import Type, TypeVar
 import instructor
-from groq import AsyncGroq
+from instructor.exceptions import InstructorRetryException
 from google import genai
+from groq import AsyncGroq
+from pydantic import BaseModel
+
 from src.schemas.nlu import (
-    IntentClassification,
     AirtimeExtraction,
-    DataExtraction,
-    CableTvExtraction,
     BettingExtraction,
+    CableTvExtraction,
+    DataExtraction,
     EducationExtraction,
-    IspExtraction,
     ElectricityExtraction,
+    IntentClassification,
+    IspExtraction,
 )
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T", bound=BaseModel)
 
 
 def get_nlu_client():
@@ -20,14 +28,12 @@ def get_nlu_client():
     Dynamically initializes and patches the client wrapper based on environment configs.
     Fetching variables INSIDE the function guarantees dotenv has already loaded them.
     """
-    # Fetch provider preference inside the execution call scope
     nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
 
     if nlu_provider == "gemini":
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         return instructor.from_genai(client, mode=instructor.Mode.GENAI_TOOLS)
     else:
-        # Fetching api_key here ensures it never reads a None value at boot time
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise ValueError(
@@ -38,250 +44,134 @@ def get_nlu_client():
         return instructor.from_groq(client, mode=instructor.Mode.TOOLS)
 
 
-# Defend against instant global instantiation crashes by making this a callable helper
-async def classify_intent(user_text: str) -> IntentClassification:
+def get_model_name() -> str:
     """
-    Sends raw chat text to the active LLM engine
-    and forces a strictly structured IntentClassification output.
+    Returns the configured model name based on provider and environment variables.
+    Allows changing models via .env without modifying source code.
+    """
+    nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
+    if nlu_provider == "gemini":
+        return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    else:
+        return os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+
+async def _run_nlu_completion(
+    response_model: Type[T], system_prompt: str, user_text: str
+) -> T:
+    """
+    Central helper to execute Instructor queries across Groq and Gemini seamlessly.
+    Includes exception handling to catch schema validation/retry failures and return safe fallbacks.
     """
     client_instance = get_nlu_client()
     nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
+    model_name = get_model_name()
 
-    model_name = (
-        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
-    )
+    try:
+        response_or_coroutine = client_instance.chat.completions.create(
+            model=model_name,
+            response_model=response_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_text},
+            ],
+            max_retries=2,
+        )
 
+        if nlu_provider == "gemini":
+            return response_or_coroutine
+        else:
+            return await response_or_coroutine
+
+    except (InstructorRetryException, Exception) as e:
+        logger.error(
+            f"⚠ [NLU Engine Error for {response_model.__name__}]: {e}"
+        )
+        try:
+            return response_model()
+        except Exception:
+            return response_model.model_construct()
+
+
+async def classify_intent(user_text: str) -> IntentClassification:
+    """Sends raw chat text to the active LLM engine
+    and forces a strictly structured IntentClassification output.
+    """
     system_prompt = (
-        "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
-        "Analyze the input text carefully, determine their intent, and return the structured parameters."
+        "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria.\n"
+        "Analyze the input text carefully, determine their intent, and return structured parameters.\n\n"
+        "Allowed action values MUST be strictly lowercase, matching one of:\n"
+        "- 'greeting'\n"
+        "- 'buy_airtime'\n"
+        "- 'buy_data'\n"
+        "- 'payfor_electricity'\n"
+        "- 'payfor_cabletv'\n"
+        "- 'payfor_betting'\n"
+        "- 'payfor_education'\n"
+        "- 'check_balance'\n"
+        "- 'fund_wallet'\n"
+        "- 'onboarding'\n"
+        "- 'unknown'"
     )
-
-    response_or_coroutine = client_instance.chat.completions.create(
-        model=model_name,
-        response_model=IntentClassification,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-    )
-    if nlu_provider == "gemini":
-        return response_or_coroutine
-    else:
-        return await response_or_coroutine
+    return await _run_nlu_completion(IntentClassification, system_prompt, user_text)
 
 
 async def extract_airtime_slots(user_text: str) -> AirtimeExtraction:
-    """
-    Sends raw chat text to the active LLM engine
-    and forces a strictly structured AirtimeExtraction output.
-    """
-    client_instance = get_nlu_client()
-    nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
-
-    model_name = (
-        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
-    )
-
     system_prompt = (
         "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
-        "Analyze the input text carefully, extract airtime purchase parameters, and return the structured parameters."
+        "Extract airtime purchase parameters. "
+        "Network values MUST be lowercase: 'mtn', 'glo', 'airtel', '9mobile'."
     )
-
-    response_or_coroutine = client_instance.chat.completions.create(
-        model=model_name,
-        response_model=AirtimeExtraction,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-    )
-    if nlu_provider == "gemini":
-        return response_or_coroutine
-    else:
-        return await response_or_coroutine
+    return await _run_nlu_completion(AirtimeExtraction, system_prompt, user_text)
 
 
 async def extract_datapurchase_slots(user_text: str) -> DataExtraction:
-    """
-    Sends raw chat text to the active LLM engine
-    and forces a strictly structured DataExtraction output.
-    """
-    client_instance = get_nlu_client()
-    nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
-
-    model_name = (
-        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
-    )
-
     system_prompt = (
         "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
-        "Analyze the input text carefully, extract data bundle purchase parameters (network, size, amount, phone_number, type), and return the structured parameters."
+        "Extract data bundle purchase parameters. "
+        "Provider values MUST be lowercase: 'mtn', 'glo', 'airtel', '9mobile'."
     )
-
-    response_or_coroutine = client_instance.chat.completions.create(
-        model=model_name,
-        response_model=DataExtraction,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-    )
-    if nlu_provider == "gemini":
-        return response_or_coroutine
-    else:
-        return await response_or_coroutine
+    return await _run_nlu_completion(DataExtraction, system_prompt, user_text)
 
 
 async def extract_cabletv_slots(user_text: str) -> CableTvExtraction:
-    """
-    Sends raw chat text to the active LLM engine
-    and forces a strictly structured CableTvExtraction output.
-    """
-    client_instance = get_nlu_client()
-    nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
-
-    model_name = (
-        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
-    )
-
     system_prompt = (
         "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
-        "Analyze the input text carefully, extract cable tv purchase parameters, and return the structured parameters."
+        "Extract cable TV subscription parameters. Provider values MUST be lowercase: 'dstv', 'gotv', 'startime'."
     )
-
-    response_or_coroutine = client_instance.chat.completions.create(
-        model=model_name,
-        response_model=CableTvExtraction,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-    )
-    if nlu_provider == "gemini":
-        return response_or_coroutine
-    else:
-        return await response_or_coroutine
+    return await _run_nlu_completion(CableTvExtraction, system_prompt, user_text)
 
 
 async def extract_betting_slots(user_text: str) -> BettingExtraction:
-    """
-    Sends raw chat text to the active LLM engine
-    and forces a strictly structured BettingExtraction output.
-    """
-    client_instance = get_nlu_client()
-    nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
-
-    model_name = (
-        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
-    )
-
     system_prompt = (
         "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
-        "Analyze the input text carefully, extract betting purchase parameters, and return the structured parameters."
+        "Extract betting payment parameters. Provider values MUST be lowercase: 'bet9ja', 'sportybet'."
     )
-
-    response_or_coroutine = client_instance.chat.completions.create(
-        model=model_name,
-        response_model=BettingExtraction,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-    )
-    if nlu_provider == "gemini":
-        return response_or_coroutine
-    else:
-        return await response_or_coroutine
+    return await _run_nlu_completion(BettingExtraction, system_prompt, user_text)
 
 
 async def extract_education_slots(user_text: str) -> EducationExtraction:
-    """
-    Sends raw chat text to the active LLM engine
-    and forces a strictly structured EducationExtraction output.
-    """
-    client_instance = get_nlu_client()
-    nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
-
-    model_name = (
-        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
-    )
-
     system_prompt = (
         "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
-        "Analyze the input text carefully, extract education purchase parameters, and return the structured parameters."
+        "Extract education fee payment parameters. Provider values MUST be lowercase: 'jamb', 'waec', 'neco'."
     )
-
-    response_or_coroutine = client_instance.chat.completions.create(
-        model=model_name,
-        response_model=EducationExtraction,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-    )
-    if nlu_provider == "gemini":
-        return response_or_coroutine
-    else:
-        return await response_or_coroutine
+    return await _run_nlu_completion(EducationExtraction, system_prompt, user_text)
 
 
 async def extract_isp_slots(user_text: str) -> IspExtraction:
-    """
-    Sends raw chat text to the active LLM engine
-    and forces a strictly structured IspExtraction output.
-    """
-    client_instance = get_nlu_client()
-    nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
-
-    model_name = (
-        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
-    )
-
     system_prompt = (
         "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
-        "Analyze the input text carefully, extract ISP purchase parameters, and return the structured parameters."
+        "Extract ISP payment parameters. Provider values MUST be lowercase: 'smile', 'spectranet'."
     )
-
-    response_or_coroutine = client_instance.chat.completions.create(
-        model=model_name,
-        response_model=IspExtraction,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-    )
-    if nlu_provider == "gemini":
-        return response_or_coroutine
-    else:
-        return await response_or_coroutine
+    return await _run_nlu_completion(IspExtraction, system_prompt, user_text)
 
 
 async def extract_electricity_slots(user_text: str) -> ElectricityExtraction:
-    """
-    Sends raw chat text to the active LLM engine
-    and forces a strictly structured ElectricityExtraction output.
-    """
-    client_instance = get_nlu_client()
-    nlu_provider = os.getenv("NLU_PROVIDER", "groq").lower()
-
-    model_name = (
-        "gemini-2.5-flash" if nlu_provider == "gemini" else "llama-3.3-70b-versatile"
-    )
-
     system_prompt = (
         "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
-        "Analyze the input text carefully, extract electricity purchase parameters, and return the structured parameters."
+        "Extract electricity bill payment parameters. "
+        "CRITICAL: The 'company' field MUST be strict lowercase matching one of: "
+        "'aedc', 'bedc', 'eedc', 'ekedc', 'ibedc', 'ikedc', 'jed', 'kaedco', 'kedco', 'phed', 'yedc'. "
+        "Never output uppercase letters for company."
     )
-
-    response_or_coroutine = client_instance.chat.completions.create(
-        model=model_name,
-        response_model=ElectricityExtraction,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ],
-    )
-    if nlu_provider == "gemini":
-        return response_or_coroutine
-    else:
-        return await response_or_coroutine
+    return await _run_nlu_completion(ElectricityExtraction, system_prompt, user_text)

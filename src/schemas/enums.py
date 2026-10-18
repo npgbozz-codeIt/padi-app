@@ -1,4 +1,4 @@
-# scr/schemas/enums.py
+# src/schemas/enums.py
 from enum import Enum
 
 
@@ -12,6 +12,7 @@ class IntentEnum(str, Enum):
     PAY_CABLETV = "payfor_cabletv"
     PAY_ELECTRICITY = "payfor_electricity"
     PAY_EDUCATION = "payfor_education"
+    GREETING = "greeting"
     UNKNOWN = "unknown"
 
 
@@ -21,7 +22,6 @@ class UserLang(str, Enum):
     HAUSA = "hausa"
 
 
-# =========================ENUMS FOR USER'S STATES ====================
 class OnboardingState(str, Enum):
     AWAITING_LANGUAGE = "awaiting_language"
     AWAITING_PHONE = "awaiting_phone"
@@ -31,7 +31,6 @@ class OnboardingState(str, Enum):
     COMPLETED = "completed"
 
 
-# ================ENUMS FOR BIGSUB AND THIRDPARTY PROVIDER============
 class TelecomProvider(str, Enum):
     AIRTEL = "airtel"
     ETISALAT = "9mobile"
@@ -62,12 +61,17 @@ class IspProvider(str, Enum):
 
 
 class Disco(str, Enum):
+    AEDC = "aedc"
+    BEDC = "bedc"
     EEDC = "eedc"
+    EKEDC = "ekedc"
     IBEDC = "ibedc"
+    IKEDC = "ikedc"
+    JED = "jed"
+    KAEDCO = "kaedco"
     KEDCO = "kedco"
-
-
-# ======== payment type enum for the payment method used by the user to fund their wallet or make a payment for a service ==============
+    PHED = "phed"
+    YEDC = "yedc"
 
 
 class PaymentType(str, Enum):

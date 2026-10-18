@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 async def sync_data_plans_to_db(db: AsyncSession) -> dict:
     """
     Background worker that updates the data_plans cache table from Bigisub API.
-    Calculates retail prices automatically using the dynamic margin calculator matrix.
+    Uses batch retrieval to eliminate N+1 database queries.
     """
     logger.info("🔄 Starting background synchronization for Bigisub data plans...")
 
@@ -23,24 +23,28 @@ async def sync_data_plans_to_db(db: AsyncSession) -> dict:
         return {"success": False, "error": api_res.get("error")}
 
     raw_plans = api_res.get("plans", [])
+    if not raw_plans:
+        return {"success": True, "inserted": 0, "updated": 0}
+
+    # 2. Batch fetch existing cached plans to memory (O(1) lookups)
+    stmt = select(DataPlan)
+    db_result = await db.execute(stmt)
+    existing_plans_map = {
+        plan.vendor_plan_id: plan for plan in db_result.scalars().all()
+    }
+
     updated_count = 0
     inserted_count = 0
 
-    # 2. Process plans line by line
+    # 3. Synchronize in memory
     for plan in raw_plans:
         v_id = plan.get("id")
         wholesale_cost = float(plan.get("amount", 0.0))
-
-        # Calculate localized retail price via your tiered markup engine
         calculated_retail = calculate_retail_price(wholesale_cost)
 
-        # 3. Look up if the plan is already cached locally
-        stmt = select(DataPlan).where(DataPlan.vendor_plan_id == v_id)
-        result = await db.execute(stmt)
-        existing_plan = result.scalars().first()
+        existing_plan = existing_plans_map.get(v_id)
 
         if existing_plan:
-            # Update attributes to match upstream status configurations
             existing_plan.wholesale_amount = wholesale_cost
             existing_plan.retail_amount = calculated_retail
             existing_plan.plan_disabled = plan.get("plan_disabled", False)
@@ -48,7 +52,6 @@ async def sync_data_plans_to_db(db: AsyncSession) -> dict:
             existing_plan.validity = plan.get("validity", "30 days")
             updated_count += 1
         else:
-            # Create a brand new caching matrix row
             new_cache_row = DataPlan(
                 vendor_plan_id=v_id,
                 network_id=int(plan.get("network", 1)),

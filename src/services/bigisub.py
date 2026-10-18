@@ -1,327 +1,379 @@
+# src/services/bigisub.py
 import os
 import logging
 import httpx
+from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
-load_dotenv()  # Load environment variables from .env file
+load_dotenv()
 
-# logger to catch api errors
 logger = logging.getLogger(__name__)
+
+# DisCo acronym / alias normalization map matching Bigisub v2 specs
+DISCO_MAPPING = {
+    "aedc": "abuja-electric",
+    "abuja": "abuja-electric",
+    "ikedc": "ikeja-electric",
+    "ikeja": "ikeja-electric",
+    "ekedc": "eko-electric",
+    "eko": "eko-electric",
+    "ibedc": "ibadan-electric",
+    "ibadan": "ibadan-electric",
+    "eedc": "enugu-electric",
+    "enugu": "enugu-electric",
+    "bedc": "benin-electric",
+    "benin": "benin-electric",
+    "jedc": "jos-electric",
+    "jed": "jos-electric",
+    "jos": "jos-electric",
+    "kaedco": "kaduna-electric",
+    "kaedc": "kaduna-electric",
+    "kaduna": "kaduna-electric",
+    "kedco": "kano-electric",
+    "kano": "kano-electric",
+    "phed": "portharcourt-electric",
+    "phedc": "portharcourt-electric",
+    "portharcourt": "portharcourt-electric",
+    "yedc": "yola-electric",
+    "yola": "yola-electric",
+    "aba": "aba-electric",
+}
 
 
 class BigisubClient:
     def __init__(self):
         self.base_url = os.getenv(
-            "BIGISUB_BASE_URL", "https://bigisub.ng/api/v2/"
-        ).rstrip(
-            "/",
-        )
-        self.api_key = os.getenv("BIGISUB_API_KEY")
-        self.usermail = os.getenv("BIGISUB_USERNAME_MAIL")
-        self.password = os.getenv("BIGISUB_PASSWORD")
-        self.bigi_transaction_pin = os.getenv("BIGISUB_PIN", "2000")
+            "BIGISUB_BASE_URL", "https://api.bigisub.ng/api/v2"
+        ).rstrip("/")
+        self.api_key = os.getenv("BIGISUB_API_KEY", "")
+        self.bigi_transaction_pin = os.getenv("BIGISUB_PIN", "1234")
         self.headers = {
             "Authorization": f"Token {self.api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        self._client: Optional[httpx.AsyncClient] = None
 
-    async def get_merchant_balance(self):
+    def get_client(self) -> httpx.AsyncClient:
         """
-        Logs into Bigisub using POST to fetch and parse the master merchant wallet balance.
+        Lazy initialization of a shared HTTP connection pool.
+        Prevents opening/closing TCP and TLS handshakes on every single request.
         """
-        url = f"{self.base_url}/auth/login/"
-        payload = {"email_or_username": self.usermail, "password": self.password}
-
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                response = await client.post(url, headers=self.headers, json=payload)
-                if response.status_code == 200:
-                    response_json = response.json()
-                    # Guard check to ensure API returns a successful internal status flag
-                    if response_json.get("success") is True:
-                        # Safely navigate nested data -> user -> walletBalance dictionary tree block
-                        data_block = response_json.get("data", {})
-                        user_data_block = data_block.get("user", {})
-                        wallet_balance = user_data_block.get(
-                            "walletBalance", user_data_block.get("balance", 0.0)
-                        )
-
-                        return float(wallet_balance)
-                    else:
-                        logger.error(
-                            f"Bigisub API returned an unsuccessful response: {response_json}"
-                        )
-                        return None
-                else:
-                    logger.error(
-                        f"Bigisub API request failed with status code {response.status_code}: {response.text}"
-                    )
-                    return None
-            except httpx.RequestError as exc:
-                logger.error(f"An error occurred while requesting Bigisub API: {exc}")
-                return None
-
-    async def vend_airtime(self, phone: str, amount: int, network: str) -> dict:
-        """
-        Sends an asynchronous request to Bigisub to process a live VTU airtime transaction.
-        """
-        url = f"{self.base_url}/vtu/airtime/purchase/"
-        # network mapping to match Bigisub's expected network ID values
-        network_mapping = {"mtn": 1, "glo": 2, "airtel": 3, "9mobile": 4}
-        # cleaning the incoming parameter
-        clean_network = network.strip().lower()
-        network_id = network_mapping.get(clean_network)
-
-        if not network_id:
-            logger.error(f"❌ Unsupported network identifier requested: {network}")
-            return {
-                "success": False,
-                "error": f"Network provider '{network}' is not supported.",
-            }
-        airtime_payload = {
-            "network": network_id,
-            "phone_number": phone,
-            "amount": str(amount),
-            "airtime_type": "vtu",
-            "pin": self.bigi_transaction_pin,
-        }
-
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                response = await client.post(
-                    url, headers=self.headers, json=airtime_payload
-                )
-                if response.status_code in [200, 201]:
-                    response_json = response.json()
-                    if response_json.get("success") is True:
-                        return {
-                            "success": True,
-                            "error": None,
-                            "transaction_id": response_json.get("data", {}).get(
-                                "transaction_id", {}
-                            ),
-                            "message": response_json.get(
-                                "message", "Airtime purchase successful"
-                            ),
-                        }
-                    else:
-                        logger.error(
-                            f"Bigisub API returned an unsuccessful response: {response_json}"
-                        )
-                        return {
-                            "success": False,
-                            "error": response_json.get(
-                                "message", "Airtime purchase failed"
-                            ),
-                        }
-                else:
-                    #  Read the exact error message from Bigisub out of the 400 Bad Request payload
-                    try:
-                        error_json = response.json()
-                        error_msg = error_json.get("message", "Validation failed")
-
-                        # Check for nested validation error dictionaries
-                        if "errors" in error_json and error_json["errors"]:
-                            # Extract the first error message from the dictionary list
-                            first_err_key = list(error_json["errors"].keys())[0]
-                            error_msg = error_json["errors"][first_err_key][0]
-                    except Exception:
-                        error_msg = "Vendor validation error occurred."
-
-                    logger.error(
-                        f"❌ Bigisub Airtime Reject ({response.status_code}): {response.text}"
-                    )
-                    return {"success": False, "error": error_msg}
-            except httpx.RequestError as exc:
-                logger.error(f"An error occurred while requesting Bigisub API: {exc}")
-                return {"error": "error accessing airtime endpoint"}
-
-    async def vend_data(
-        self,
-        phone: str,
-        plan_id: int,
-        network: str,
-    ) -> dict:
-        """
-        Sends an asynchronous request to Bigisub to process a live VTU airtime transaction.
-        """
-        url = f"{self.base_url}/vtu/data/purchase/"
-        network_mapping = {"mtn": 1, "glo": 2, "airtel": 3, "9mobile": 4}
-        clean_network = network.strip().lower()
-        network_id = network_mapping.get(clean_network)
-        if not network_id:
-            logger.error(
-                f"❌ Unsupported network provider requested for data: {network}"
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                headers=self.headers,
+                timeout=20.0,
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
             )
-            return {
-                "success": False,
-                "error": f"Network provider '{network}' is not supported.",
-            }
-        data_payload = {
-            "network": network_id,
-            "plan": plan_id,
-            "phone_number": str(phone),
-            "pin": self.bigi_transaction_pin,
-            "ported_number": True,
-        }
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                response = await client.post(
-                    url, headers=self.headers, json=data_payload
-                )
-                if response.status_code in [200, 201]:
-                    response_json = response.json()
-                    if response_json.get("success") is True:
-                        return {
-                            "success": True,
-                            "error": None,
-                            "transaction_id": response_json.get("data", {}).get(
-                                "transaction_id", {}
-                            ),
-                            "message": response_json.get(
-                                "message", "Data purchase successful"
-                            ),
-                        }
-                    else:
-                        logger.error(
-                            f"❌ Bigisub rejected data purchase validation: {response_json}"
-                        )
-                        return {
-                            "success": False,
-                            "error": response_json.get(
-                                "message", "Data purchase failed"
-                            ),
-                        }
-                else:
-                    #  Read the exact error message from Bigisub out of the 400 Bad Request payload
-                    try:
-                        error_json = response.json()
-                        error_msg = error_json.get("message", "Validation failed")
+        return self._client
 
-                        # Check for nested validation error dictionaries
-                        if "errors" in error_json and error_json["errors"]:
-                            # Extract the first error message from the dictionary list
-                            first_err_key = list(error_json["errors"].keys())[0]
-                            error_msg = error_json["errors"][first_err_key][0]
-                    except Exception:
-                        error_msg = "Vendor validation error occurred."
-
-                    logger.error(
-                        f"❌ Bigisub Data Reject ({response.status_code}): {response.text}"
-                    )
-                    return {"success": False, "error": error_msg}
-            except httpx.RequestError as exc:
-                logger.error(
-                    f"🚨 Network error occurred while connecting to Bigisub: {exc}"
-                )
-                return {
-                    "success": False,
-                    "error": "Connection to payment gateway timed out.",
-                }
-
-    async def fetch_live_data_plans(self, network_id: int | None = None) -> dict:
+    async def close(self):
         """
-        Fetches the complete list of available data plans directly from Bigisub.
-        Allows optional filtering by network_id (1=MTN, 2=Glo, 3=Airtel, 4=9mobile).
+        Gracefully closes the HTTP connection pool on application shutdown.
         """
-        url = f"{self.base_url}/vtu/data/plans/"
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
 
-        # Build query parameters if filtering by a specific network provider
-        params = {}
-        if network_id:
-            params["network"] = network_id
+    # ==================== ELECTRICITY BILLS ====================
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            try:
-                response = await client.get(url, headers=self.headers, params=params)
-
-                if response.status_code == 200:
-                    response_json = response.json()
-                    if response_json.get("success") is True:
-                        return {
-                            "success": True,
-                            "plans": response_json.get("data", []),
-                            "error": None,
-                        }
-                    return {
-                        "success": False,
-                        "plans": [],
-                        "error": response_json.get("message"),
-                    }
-
-                logger.error(
-                    f"❌ Bigisub Plan Fetch Failed ({response.status_code}): {response.text}"
-                )
-                return {
-                    "success": False,
-                    "plans": [],
-                    "error": f"HTTP Error {response.status_code}",
-                }
-
-            except httpx.RequestError as exc:
-                logger.error(f"🚨 Network error fetching Bigisub data plans: {exc}")
-                return {"success": False, "plans": [], "error": "Connection timed out."}
-
-    # ==electricity vending methods==
-
-    async def get_electricity_providers(self) -> dict:
-        """Fetches the list of active DisCo provider codes from Bigisub."""
+    async def fetch_electricity_providers(self) -> Dict[str, Any]:
+        """
+        GET /bills/electricity/providers/
+        Retrieves list of active DisCos and their provider codes.
+        """
         url = f"{self.base_url}/bills/electricity/providers/"
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            try:
-                response = await client.get(url, headers=self.headers)
-                return response.json()
-            except Exception as e:
-                logger.error(f"🚨 Failed fetching electricity providers: {e}")
-                return {"success": False, "message": str(e)}
+        client = self.get_client()
 
-    async def verify_meter(
-        self, company: str, meter_no: str, meter_type: str = "prepaid"
-    ) -> dict:
-        """Validates a utility meter number against a specific DisCo company code."""
+        try:
+            response = await client.get(url)
+            if response.status_code == 200:
+                res_data = response.json()
+                providers = res_data.get("data", {}).get("providers", [])
+                return {"success": True, "providers": providers, "error": None}
+
+            logger.error(f"❌ Fetch Providers Error ({response.status_code}): {response.text}")
+            return {"success": False, "providers": [], "error": f"Vendor returned HTTP {response.status_code}"}
+
+        except httpx.RequestError as exc:
+            logger.error(f"🚨 Network error fetching electricity providers: {exc}")
+            return {"success": False, "providers": [], "error": "Connection to gateway timed out."}
+
+    async def verify_electricity_meter(
+        self, provider: str, meter_number: str, meter_type: str = "prepaid"
+    ) -> Dict[str, Any]:
+        """
+        POST /bills/electricity/verify/
+        Verifies meter number and retrieves customer name.
+        """
         url = f"{self.base_url}/bills/electricity/verify/"
+
+        # Normalize provider alias (e.g. 'aedc' -> 'abuja-electric')
+        raw_provider = str(provider).strip().lower()
+        company_slug = DISCO_MAPPING.get(raw_provider, raw_provider)
+
         payload = {
-            "company": company.lower().strip(),
-            "meter_no": str(meter_no).strip(),
-            "meter_type": meter_type.lower().strip(),
+            "company": company_slug,
+            "meter_no": str(meter_number),
+            "meter_type": meter_type.lower(),
         }
-        async with httpx.AsyncClient(timeout=15.0) as client:
+
+        client = self.get_client()
+        try:
+            response = await client.post(url, json=payload)
+            if response.status_code == 200:
+                res_data = response.json()
+                if res_data.get("success") is True or res_data.get("status") == "success":
+                    data_obj = res_data.get("data", {}) or {}
+                    customer_name = (
+                        data_obj.get("customer_name")
+                        or res_data.get("customer_name")
+                        or "Valued Customer"
+                    )
+                    return {
+                        "success": True,
+                        "customer_name": customer_name,
+                        "meter_number": str(meter_number),
+                        "address": data_obj.get("address") or res_data.get("address"),
+                        "error": None,
+                    }
+                return {
+                    "success": False,
+                    "error": res_data.get("message", "Meter verification failed."),
+                }
+
+            error_msg = "Could not verify meter number."
             try:
-                response = await client.post(url, headers=self.headers, json=payload)
-                return response.json()
-            except Exception as e:
-                logger.error(f"🚨 Meter verification exception: {e}")
-                return {"success": False, "message": str(e)}
+                error_json = response.json()
+                error_msg = error_json.get("message", error_msg)
+            except Exception:
+                pass
+
+            logger.error(f"❌ Bigisub Meter Verify Error ({response.status_code}): {response.text}")
+            return {"success": False, "error": error_msg}
+
+        except httpx.RequestError as exc:
+            logger.error(f"🚨 Network error verifying meter: {exc}")
+            return {"success": False, "error": "Connection to gateway timed out."}
 
     async def vend_electricity(
         self,
-        company: str,
-        meter_no: str,
-        meter_type: str,
-        phone_number: str,
-        amount: int,
+        provider: str,
+        meter_number: str,
+        amount: float,
+        phone: str,
         customer_name: str,
-    ) -> dict:
-        """Executes the final electricity token purchase payload."""
+        meter_type: str = "prepaid",
+    ) -> Dict[str, Any]:
+        """
+        POST /bills/electricity/pay/
+        Executes electricity payment using verified customer name.
+        """
         url = f"{self.base_url}/bills/electricity/pay/"
+
+        raw_provider = str(provider).strip().lower()
+        company_slug = DISCO_MAPPING.get(raw_provider, raw_provider)
+
         payload = {
-            "company": company.lower().strip(),
-            "meter_no": str(meter_no).strip(),
-            "meter_type": meter_type.lower().strip(),
-            "phone_number": phone_number,
-            "amount": amount,
-            "Customer_name": customer_name,  # Matches the capitalized key convention
-            "pin": self.bigi_transaction_pin,
+            "company": company_slug,
+            "meter_no": str(meter_number),
+            "meter_type": meter_type.lower(),
+            "amount": str(int(amount)),
+            "phone_number": str(phone),
+            "customer_name": str(customer_name),
+            "pin": str(self.bigi_transaction_pin),
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
+
+        client = self.get_client()
+        try:
+            response = await client.post(url, json=payload)
+            if response.status_code in [200, 201]:
+                res_data = response.json()
+                if res_data.get("success") is True or res_data.get("status") == "success":
+                    data_obj = res_data.get("data", {}) or {}
+                    return {
+                        "success": True,
+                        "error": None,
+                        "transaction_id": data_obj.get("transaction_id"),
+                        "reference": data_obj.get("reference"),
+                        "token": data_obj.get("token") or res_data.get("token"),
+                        "units": data_obj.get("units") or res_data.get("units"),
+                        "message": res_data.get("message", "Electricity payment successful"),
+                    }
+                return {
+                    "success": False,
+                    "error": res_data.get("message", "Electricity payment failed"),
+                }
+
+            error_msg = "Electricity payment failed at vendor level."
             try:
-                response = await client.post(url, headers=self.headers, json=payload)
-                return response.json()
-            except Exception as e:
-                logger.error(f"🚨 Electricity vending exception: {e}")
-                return {"success": False, "message": str(e)}
+                error_json = response.json()
+                error_msg = error_json.get("message", error_msg)
+            except Exception:
+                pass
+
+            logger.error(f"❌ Bigisub Electricity Pay Error ({response.status_code}): {response.text}")
+            return {"success": False, "error": error_msg}
+
+        except httpx.RequestError as exc:
+            logger.error(f"🚨 Network error connecting to Bigisub: {exc}")
+            return {"success": False, "error": "Connection to payment gateway timed out."}
+
+    # ==================== AIRTIME ====================
+
+    async def vend_airtime(self, phone: str, amount: float, network: str) -> Dict[str, Any]:
+        """
+        POST /vtu/airtime/purchase/
+        Executes instant VTU airtime vending.
+        """
+        url = f"{self.base_url}/vtu/airtime/purchase/"
+        network_mapping = {"mtn": 1, "glo": 2, "airtel": 3, "9mobile": 4}
+        network_id = network_mapping.get(str(network).strip().lower())
+
+        if not network_id:
+            return {"success": False, "error": f"Network provider '{network}' is not supported."}
+
+        payload = {
+            "network": network_id,
+            "phone_number": str(phone),
+            "amount": str(int(amount)),
+            "airtime_type": "vtu",
+            "pin": str(self.bigi_transaction_pin),
+        }
+
+        client = self.get_client()
+        try:
+            response = await client.post(url, json=payload)
+            if response.status_code in [200, 201]:
+                res_data = response.json()
+                if res_data.get("success") is True or res_data.get("status") == "success":
+                    data_obj = res_data.get("data", {}) or {}
+                    return {
+                        "success": True,
+                        "error": None,
+                        "transaction_id": data_obj.get("transaction_id"),
+                        "reference": data_obj.get("reference"),
+                        "message": res_data.get("message", "Airtime purchase successful"),
+                    }
+                return {"success": False, "error": res_data.get("message", "Airtime purchase failed")}
+
+            error_msg = "Airtime vending failed at vendor level."
+            try:
+                error_json = response.json()
+                error_msg = error_json.get("message", error_msg)
+            except Exception:
+                pass
+
+            logger.error(f"❌ Bigisub Airtime Error ({response.status_code}): {response.text}")
+            return {"success": False, "error": error_msg}
+
+        except httpx.RequestError as exc:
+            logger.error(f"🚨 Network error connecting to Bigisub: {exc}")
+            return {"success": False, "error": "Connection to gateway timed out."}
+
+    # ==================== DATA ====================
+
+    async def fetch_live_data_plans(
+        self, network: Optional[str] = None, plantype: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        GET /vtu/data/plans/
+        Fetches active data plans with optional filtering (network, plantype).
+        """
+        url = f"{self.base_url}/vtu/data/plans/"
+        params = {}
+
+        if network:
+            network_mapping = {"mtn": 1, "glo": 2, "airtel": 3, "9mobile": 4}
+            net_id = network_mapping.get(str(network).strip().lower())
+            if net_id:
+                params["network"] = net_id
+        if plantype:
+            params["plantype"] = plantype.upper()
+
+        client = self.get_client()
+        try:
+            response = await client.get(url, params=params)
+            if response.status_code == 200:
+                res_data = response.json()
+                plans = res_data.get("data", []) if isinstance(res_data, dict) else res_data
+                return {"success": True, "plans": plans, "error": None}
+
+            logger.error(f"❌ Fetch Data Plans Error ({response.status_code}): {response.text}")
+            return {"success": False, "plans": [], "error": f"Vendor returned HTTP {response.status_code}"}
+
+        except httpx.RequestError as exc:
+            logger.error(f"🚨 Network error fetching data plans: {exc}")
+            return {"success": False, "plans": [], "error": "Connection to gateway timed out."}
+
+    async def vend_data(self, phone: str, plan_id: int, network: str) -> Dict[str, Any]:
+        """
+        POST /vtu/data/purchase/
+        Executes data plan purchase using plan ID.
+        """
+        url = f"{self.base_url}/vtu/data/purchase/"
+        network_mapping = {"mtn": 1, "glo": 2, "airtel": 3, "9mobile": 4}
+        network_id = network_mapping.get(str(network).strip().lower())
+
+        if not network_id:
+            return {"success": False, "error": f"Network provider '{network}' is not supported."}
+
+        payload = {
+            "network": network_id,
+            "plan": int(plan_id),
+            "phone_number": str(phone),
+            "pin": str(self.bigi_transaction_pin),
+            "ported_number": True,
+        }
+
+        client = self.get_client()
+        try:
+            response = await client.post(url, json=payload)
+            if response.status_code in [200, 201]:
+                res_data = response.json()
+                if res_data.get("success") is True or res_data.get("status") == "success":
+                    data_obj = res_data.get("data", {}) or {}
+                    return {
+                        "success": True,
+                        "error": None,
+                        "transaction_id": data_obj.get("transaction_id"),
+                        "message": res_data.get("message", "Data purchase successful"),
+                    }
+                return {"success": False, "error": res_data.get("message", "Data purchase failed")}
+
+            error_msg = "Data purchase failed."
+            try:
+                error_json = response.json()
+                error_msg = error_json.get("message", error_msg)
+            except Exception:
+                pass
+
+            logger.error(f"❌ Bigisub Data Error ({response.status_code}): {response.text}")
+            return {"success": False, "error": error_msg}
+
+        except httpx.RequestError as exc:
+            logger.error(f"🚨 Network error connecting to Bigisub: {exc}")
+            return {"success": False, "error": "Connection to payment gateway timed out."}
+
+    # ==================== ACCOUNT BALANCE ====================
+
+    async def check_balance(self) -> Dict[str, Any]:
+        """
+        GET /user/balance/
+        Retrieves current wallet balance.
+        """
+        url = f"{self.base_url}/user/balance/"
+        client = self.get_client()
+        try:
+            response = await client.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                balance_val = data.get("balance", 0.0)
+                if isinstance(data, dict) and "data" in data and "balance" in data["data"]:
+                    balance_val = data["data"]["balance"]
+                return {"success": True, "balance": float(balance_val)}
+            return {"success": False, "error": f"Failed with status {response.status_code}"}
+        except httpx.RequestError as exc:
+            return {"success": False, "error": str(exc)}
 
 
-# Instantiating single global object machine for use across system layers
 bigisub_client = BigisubClient()

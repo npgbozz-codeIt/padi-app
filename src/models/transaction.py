@@ -1,8 +1,9 @@
 # src/models/transaction.py
 import uuid
+from decimal import Decimal
 from enum import Enum
 from datetime import datetime, timezone
-from sqlalchemy import String, Numeric, DateTime, ForeignKey, Enum as SLEnum
+from sqlalchemy import String, Numeric, DateTime, ForeignKey, Enum as SLEnum, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from src.models.base import Base
@@ -14,6 +15,7 @@ class TransactionType(str, Enum):
     INTERNET = "internet"
     BETTING = "betting"
     EDUCATION = "education"
+    ELECTRICITY = "electricity"  # Added ELECTRICITY
     CABLETV = "cabletv"
     P2P_TRANSFER = "p2p_transfer"
     DEPOSIT = "deposit"
@@ -28,7 +30,6 @@ class TransactionStatus(str, Enum):
 class Transaction(Base):
     __tablename__ = "transactions"
 
-    # Modern SQLAlchemy v2 Mapping Definitions
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
@@ -39,7 +40,7 @@ class Transaction(Base):
     tx_type: Mapped[TransactionType] = mapped_column(
         SLEnum(TransactionType), nullable=False
     )
-    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     recipient: Mapped[str] = mapped_column(String, nullable=False)
     provider: Mapped[str] = mapped_column(String, nullable=True)
 
@@ -48,7 +49,12 @@ class Transaction(Base):
         SLEnum(TransactionStatus), default=TransactionStatus.PENDING, nullable=False
     )
 
-    # Secure, non-deprecated timezone-aware timestamp creation logic
+    # Fulfillment specific: Token for electricity, bundle size for data, etc.
+    token_or_details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
+    # Financial snapshot after transaction completion
+    balance_after: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+
     date_created: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

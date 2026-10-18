@@ -18,21 +18,28 @@ class Profile(Base):
     user_wallet: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), server_default="0.00", nullable=False
     )
-    # paystack kyc information
+    
+    # Paystack KYC & Identification Information
     first_name: Mapped[str] = mapped_column(String(125))
     last_name: Mapped[str] = mapped_column(String(125))
-    phone_num: Mapped[str] = mapped_column(
+    phone_num: Mapped[Optional[str]] = mapped_column(
         String(15), unique=True, nullable=True, index=True
     )
-    lang: Mapped[str] = mapped_column(String(20), nullable=True, default="english")
-    user_state: Mapped[str] = mapped_column(
+    lang: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="english")
+    user_state: Mapped[Optional[str]] = mapped_column(
         String(50), nullable=True, default="awaiting_language"
     )
     email: Mapped[str] = mapped_column(String(125), unique=True)
-    bnv: Mapped[str] = mapped_column(String(11), unique=True, nullable=True)
-    # transactional pin
-    hash_pin: Mapped[str] = mapped_column(String(225), unique=True, nullable=True)
-    # relashionships
+    bnv: Mapped[Optional[str]] = mapped_column(String(11), unique=True, nullable=True)
+    
+    # Transactional PIN (Unique constraint removed to prevent IntegrityErrors)
+    hash_pin: Mapped[Optional[str]] = mapped_column(String(225), nullable=True)
+    
+    # Viral Growth & Referral Tracking Fields
+    referral_code: Mapped[Optional[str]] = mapped_column(String(50), unique=True, index=True, nullable=True)
+    referred_by: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    
+    # Relationships
     identities: Mapped[List["UserIdentity"]] = relationship(
         back_populates="profile", cascade="all, delete-orphan"
     )
@@ -40,6 +47,7 @@ class Profile(Base):
         back_populates="profile",
         uselist=False,
     )
+    
     date_created: Mapped[datetime] = mapped_column(
         DateTime, server_default=text("Now()")
     )

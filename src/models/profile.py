@@ -43,6 +43,11 @@ class Profile(Base):
 
     # Transactional PIN (Unique constraint removed to prevent IntegrityErrors)
     hash_pin: Mapped[Optional[str]] = mapped_column(String(225), nullable=True)
+    # Transaction Authorization Mode ("always" or "5min")
+    pin_mode: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True, default=None
+    )
+
 
     # Viral Growth & Referral Tracking Fields
     referral_code: Mapped[Optional[str]] = mapped_column(

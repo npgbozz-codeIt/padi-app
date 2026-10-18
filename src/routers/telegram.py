@@ -1,5 +1,7 @@
 # src/routers/telegram.py
 import re
+import bcrypt
+import httpx
 from typing import Annotated
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, status
@@ -23,6 +25,7 @@ from src.services.session_manager import SessionManager
 from src.services.state_manager import state_manager
 from src.services.telegram import logger, telegram_client
 from src.services.financial.paystack import PaystackFinancialProvider
+from src.services.handlers.registry import get_vending_handler
 from src.schemas.telegram import TelegramWebhookInput
 from src.utils.responses import TRANSACTION_RESPONSES
 from src.utils.tag_generator import tag_generator
@@ -37,13 +40,30 @@ redis_client = aioredis.Redis(connection_pool=redis_pool)
 
 
 def is_valid_phone(phone_str: str) -> bool:
-    """Strictly checks for 11-digit or 234-prefixed Nigerian phone numbers."""
     clean = re.sub(r"\D", "", str(phone_str))
     if len(clean) == 11 and clean.startswith("0"):
         return True
     if len(clean) == 13 and clean.startswith("234"):
         return True
     return False
+
+
+def normalize_phone(phone_str: str) -> str:
+    """Normalizes phone numbers to 234XXXXXXXXXX format for safe comparison."""
+    clean = re.sub(r"\D", "", str(phone_str))
+    if clean.startswith("0") and len(clean) == 11:
+        return "234" + clean[1:]
+    return clean
+
+
+async def delete_telegram_message(chat_id: int, message_id: int):
+    """Deletes sensitive messages (like transaction PINs) from Telegram chat."""
+    try:
+        url_delete = f"{telegram_client.base_url}/deleteMessage"
+        async with httpx.AsyncClient() as client:
+            await client.post(url_delete, json={"chat_id": chat_id, "message_id": message_id})
+    except Exception as e:
+        logger.warning(f"Failed to delete sensitive message: {e}")
 
 
 async def handle_inline_callbacks(update: dict, db: AsyncSession):
@@ -77,7 +97,57 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
     res = await db.execute(stmt)
     profile = res.scalars().first()
 
-    # 1. Handle Onboarding Inline Callbacks
+    # Handle PIN Reset Trigger Callback
+    if click_data == "trigger_reset_pin":
+        await state_manager.set_session(
+            user_id=str(telegramuser_id),
+            state="AWAITING_RESET_CONTACT",
+            intent="reset_pin",
+            payload={}
+        )
+        await telegram_client.send_message({
+            "chat_id": chat_id,
+            "text": (
+                "🛡️ **Reset Transaction PIN**\n\n"
+                "To verify your identity, tap the button below to share your registered phone number:"
+            ),
+            "reply_markup": {
+                "keyboard": [
+                    [{"text": "📱 Verify with Phone Number", "request_contact": True}]
+                ],
+                "resize_keyboard": True,
+                "one_time_keyboard": True
+            },
+            "parse_mode": "Markdown"
+        })
+        return {"status": "ok"}
+
+    # Handle PIN Authorization Preference Selection
+    if click_data.startswith("pin_mode:"):
+        mode = click_data.split(":")[1]
+        if profile:
+            profile.pin_mode = mode
+            await db.commit()
+
+            session = await state_manager.get_session(str(telegramuser_id))
+            if session:
+                await state_manager.set_session(
+                    user_id=str(telegramuser_id),
+                    state="AWAITING_PIN",
+                    intent=session.get("intent"),
+                    payload=session.get("payload")
+                )
+
+            mode_text = "remembered for 5 minutes" if mode == "5min" else "required for every trade"
+            await telegram_client.edit_message_text({
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": f"✅ Preference saved: PIN will be **{mode_text}**.\n\n🔐 Please enter your **4-digit transaction PIN** to authorize this payment:",
+                "parse_mode": "Markdown"
+            })
+            return {"status": "ok"}
+
+    # Handle Onboarding Inline Callbacks
     if (
         click_data.startswith("lang_")
         or click_data.startswith("name_confirm_")
@@ -115,7 +185,7 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
     user_lang = profile.lang.lower() if profile and profile.lang else "english"
     tx_copy = TRANSACTION_RESPONSES.get(user_lang, TRANSACTION_RESPONSES["english"])
 
-    # Handle preset funding amount buttons (e.g. fund_preset:1000)
+    # Handle preset funding amount buttons
     if click_data.startswith("fund_preset:"):
         if not profile:
             return {"status": "error"}
@@ -308,11 +378,7 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
         target_phone = (
             phone_num
             if (phone_num != "PROMPT_PHONE" and is_valid_phone(phone_num))
-            else (
-                profile.phone_num
-                if (profile and profile.phone_num and is_valid_phone(profile.phone_num))
-                else None
-            )
+            else None
         )
 
         if not target_phone or not is_valid_phone(target_phone):
@@ -355,7 +421,6 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
         )
 
         formatted_size = format_data_size(plan_obj.size)
-
         confirm_text = (
             f"📦 **Data Bundle Order Summary**\n"
             f"• Network: {plan_obj.network_name.upper()}\n"
@@ -477,6 +542,8 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
 
     telegramuser_id = payload.message.message_from.id
     chat_id = payload.message.chat.id
+    message_id = payload.message.message_id
+    raw_message = update.get("message", {})
 
     try:
         await telegram_client.send_chat_action(chat_id=chat_id, action="typing")
@@ -498,8 +565,191 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
 
     if existing_user:
         profile = existing_user.profile
+        session = await state_manager.get_session(str(telegramuser_id))
+        current_state = session.get("state") if session else None
 
-        # 1. PRIORITY INTERCEPT: Handle Custom Funding Amount Input State
+        # -----------------------------------------------------------------
+        # PIN RESET FLOW: Step 1 (Contact Shared Verification)
+        # -----------------------------------------------------------------
+        if current_state == "AWAITING_RESET_CONTACT":
+            contact_data = raw_message.get("contact")
+            if not contact_data:
+                await telegram_client.send_message({
+                    "chat_id": chat_id,
+                    "text": "❌ Please tap the '📱 Verify with Phone Number' button below to continue, or type 'cancel'."
+                })
+                return {"success": 200, "result": "awaiting_contact"}
+
+            sender_uid = contact_data.get("user_id")
+            shared_phone = contact_data.get("phone_number", "")
+
+            # Security verification
+            if sender_uid != telegramuser_id or normalize_phone(shared_phone) != normalize_phone(profile.phone_num):
+                await telegram_client.send_message({
+                    "chat_id": chat_id,
+                    "text": "❌ Phone number verification failed. The shared contact does not match your registered MyPadi profile.",
+                    "reply_markup": {"remove_keyboard": True}
+                })
+                await state_manager.clear_session(str(telegramuser_id))
+                return {"success": 200, "result": "reset_verification_failed"}
+
+            # Verification passed -> Move to AWAITING_NEW_PIN
+            await state_manager.set_session(
+                user_id=str(telegramuser_id),
+                state="AWAITING_NEW_PIN",
+                intent="reset_pin",
+                payload={}
+            )
+            await telegram_client.send_message({
+                "chat_id": chat_id,
+                "text": "✅ Identity verified successfully!\n\n🔐 Please enter your **new 4-digit transaction PIN**:",
+                "reply_markup": {"remove_keyboard": True},
+                "parse_mode": "Markdown"
+            })
+            return {"success": 200, "result": "contact_verified"}
+
+        # -----------------------------------------------------------------
+        # PIN RESET FLOW: Step 2 (Capture & Save New PIN)
+        # -----------------------------------------------------------------
+        if current_state == "AWAITING_NEW_PIN":
+            await delete_telegram_message(chat_id, message_id)
+
+            new_pin_input = user_message.strip()
+            if not new_pin_input.isdigit() or len(new_pin_input) != 4:
+                await telegram_client.send_message({
+                    "chat_id": chat_id,
+                    "text": "❌ PIN must be exactly 4 digits. Please enter a valid 4-digit PIN:"
+                })
+                return {"success": 200, "result": "invalid_new_pin"}
+
+            hashed_new_pin = bcrypt.hashpw(new_pin_input.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            profile.hash_pin = hashed_new_pin
+            await db.commit()
+
+            # Clear failure attempts and locks
+            await redis_client.delete(f"pin_fails:{telegramuser_id}")
+            await redis_client.delete(f"pin_lockout:{telegramuser_id}")
+            await state_manager.clear_session(str(telegramuser_id))
+
+            await telegram_client.send_message({
+                "chat_id": chat_id,
+                "text": (
+                    "🎉 **Transaction PIN Reset Successful!**\n\n"
+                    "Your new PIN is now active and secured. You can continue trading safely!\n\n"
+                    "Type 'menu' anytime to view available options."
+                ),
+                "parse_mode": "Markdown"
+            })
+            return {"success": 200, "result": "pin_reset_complete"}
+
+        # -----------------------------------------------------------------
+        # TRANSACTION PIN VERIFICATION INTERCEPT
+        # -----------------------------------------------------------------
+        if current_state == "AWAITING_PIN":
+            await delete_telegram_message(chat_id, message_id)
+
+            # Check if wallet is locked out
+            is_locked = await redis_client.get(f"pin_lockout:{telegramuser_id}")
+            if is_locked:
+                ttl = await redis_client.ttl(f"pin_lockout:{telegramuser_id}")
+                minutes_left = max(1, ttl // 60)
+                await telegram_client.send_message({
+                    "chat_id": chat_id,
+                    "text": f"⏳ **Account Temporarily Locked**\n\nToo many incorrect PIN attempts. Please wait {minutes_left} minute(s) before trying again or tap Reset PIN below:",
+                    "reply_markup": {
+                        "inline_keyboard": [
+                            [{"text": "🔄 Reset PIN Now", "callback_data": "trigger_reset_pin"}]
+                        ]
+                    },
+                    "parse_mode": "Markdown"
+                })
+                return {"success": 200, "result": "account_locked"}
+
+            pin_input = user_message.strip()
+            if not pin_input.isdigit() or len(pin_input) != 4:
+                await telegram_client.send_message({
+                    "chat_id": chat_id,
+                    "text": "❌ PIN must be exactly 4 digits. Please re-enter your PIN (or reply 'cancel'):"
+                })
+                return {"success": 200, "result": "invalid_pin_format"}
+
+            # Verify against bcrypt hash stored in profile
+            is_valid_pin = False
+            if profile.hash_pin:
+                is_valid_pin = bcrypt.checkpw(pin_input.encode("utf-8"), profile.hash_pin.encode("utf-8"))
+
+            if not is_valid_pin:
+                # Increment failure count in Redis
+                fail_key = f"pin_fails:{telegramuser_id}"
+                fails = await redis_client.incr(fail_key)
+                await redis_client.expire(fail_key, 3600)
+
+                if fails >= 5:
+                    await redis_client.set(f"pin_lockout:{telegramuser_id}", "locked", ex=900)
+                    await state_manager.clear_session(str(telegramuser_id))
+                    await telegram_client.send_message({
+                        "chat_id": chat_id,
+                        "text": "🚨 **Security Alert**\n\n5 incorrect PIN attempts reached. Your wallet transactions are temporarily locked for 15 minutes.\n\nTap below to reset your PIN immediately:",
+                        "reply_markup": {
+                            "inline_keyboard": [
+                                [{"text": "🔄 Reset PIN Now", "callback_data": "trigger_reset_pin"}]
+                            ]
+                        },
+                        "parse_mode": "Markdown"
+                    })
+                    return {"success": 200, "result": "locked_out"}
+
+                elif fails >= 3:
+                    await telegram_client.send_message({
+                        "chat_id": chat_id,
+                        "text": f"❌ Incorrect PIN. ({fails}/5 attempts used).\n\nIf you've forgotten your PIN, you can reset it instantly:",
+                        "reply_markup": {
+                            "inline_keyboard": [
+                                [{"text": "🔄 Forgot / Reset PIN", "callback_data": "trigger_reset_pin"}]
+                            ]
+                        }
+                    })
+                    return {"success": 200, "result": "pin_failed_warning"}
+
+                else:
+                    await telegram_client.send_message({
+                        "chat_id": chat_id,
+                        "text": f"❌ Incorrect transaction PIN. ({fails}/3 attempts). Please try again (or reply 'cancel'):"
+                    })
+                    return {"success": 200, "result": "pin_verification_failed"}
+
+            # PIN is valid -> Clear failure counters
+            await redis_client.delete(f"pin_fails:{telegramuser_id}")
+
+            # If user selected 5-min caching mode, set 300s TTL in Redis
+            if profile.pin_mode == "5min":
+                await redis_client.set(f"pin_auth:{telegramuser_id}", "authenticated", ex=300)
+
+            # PIN validated: Execute the pending transaction
+            intent = session.get("intent")
+            slots = session.get("payload", {}).get("slots", {})
+            await state_manager.clear_session(str(telegramuser_id))
+
+            handler = get_vending_handler(intent)
+            if not handler:
+                await telegram_client.send_message({
+                    "chat_id": chat_id,
+                    "text": "❌ Transaction handler unavailable."
+                })
+                return {"success": 200, "result": "no_handler"}
+
+            exec_res = await handler.execute(db=db, profile=profile, slots=slots)
+            bot_reply = exec_res.get("message", "Transaction completed.")
+            await telegram_client.send_message({
+                "chat_id": chat_id,
+                "text": bot_reply,
+                "parse_mode": "Markdown"
+            })
+            return {"success": 200, "result": "pin_authorized_and_executed"}
+
+        # -----------------------------------------------------------------
+        # PRIORITY INTERCEPT: Custom Funding Amount Input State
+        # -----------------------------------------------------------------
         if profile.user_state == "awaiting_custom_fund_amount":
             clean_input = re.sub(r"\D", "", user_message)
             if not clean_input.isdigit() or int(clean_input) <= 0:
@@ -513,7 +763,6 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
             amount_naira = int(clean_input)
             amount_in_kobo = amount_naira * 100
 
-            # Reset state back to active
             profile.user_state = "active"
             await db.commit()
 
@@ -543,7 +792,9 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
                 })
             return {"success": 200, "result": "custom_fund_initialized"}
 
-        # 2. Gatekeeping: Delegate actual onboarding states straight to OnboardingHandler
+        # -----------------------------------------------------------------
+        # Gatekeeping: Onboarding states
+        # -----------------------------------------------------------------
         onboarding_states = [
             "awaiting_language",
             "awaiting_phone",
@@ -566,11 +817,12 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
             )
             return {"success": 200, "result": res}
 
-        # 3. Active User Commands & Conversation Pipeline
+        # -----------------------------------------------------------------
+        # Active User Commands & Conversation Pipeline
+        # -----------------------------------------------------------------
         user_lang = profile.lang or "english"
         tx_copy = TRANSACTION_RESPONSES.get(user_lang, TRANSACTION_RESPONSES["english"])
 
-        # Handle explicit /fund command or text
         if user_message.lower() in ["/fund", "fund", "fund wallet", "topup"]:
             await telegram_client.send_message({
                 "chat_id": chat_id,
@@ -633,7 +885,6 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
         bot_reply = pipeline_res.get("message", "Processing request...")
         reply_markup = pipeline_res.get("reply_markup")
 
-        # If transaction failed due to insufficient balance, attach a quick fund button
         if "balance is running low" in bot_reply.lower():
             if not reply_markup:
                 reply_markup = {"inline_keyboard": []}
@@ -641,7 +892,7 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
                 reply_markup["inline_keyboard"].append([{"text": "💳 Fund Wallet via Paystack", "callback_data": "trigger_fund_wallet"}])
 
         msg_payload = {
-            "chat_id": chart_id if 'chart_id' in locals() else chat_id,
+            "chat_id": chat_id,
             "text": bot_reply,
             "parse_mode": "Markdown",
         }
@@ -652,7 +903,7 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
         return {"success": 200, "message": pipeline_res.get("status")}
 
     else:
-        # 3. Brand New User Creation & Referral Deep Link Extraction
+        # Brand New User Creation
         referred_by_code = None
         if user_message.startswith("/start ref_"):
             referred_by_code = user_message.replace("/start ref_", "").strip()
@@ -680,7 +931,6 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
         db.add(new_identity)
         await db.commit()
 
-        # Initiate Onboarding
         res = await OnboardingHandler.process_onboarding(
             db=db,
             profile=new_profile,

@@ -10,8 +10,14 @@ from src.services.handlers.registry import get_vending_handler
 from src.services.data_ux_handler import process_data_ux_routing, format_data_size
 from src.models.data_plan import DataPlan
 from src.utils.network_detector import detect_network, normalize_network_name
+import redis.asyncio as aioredis
 
 logger = logging.getLogger(__name__)
+
+redis_pool = aioredis.ConnectionPool(
+    host="localhost", port=6379, db=0, decode_responses=True, protocol=2
+)
+redis_client = aioredis.Redis(connection_pool=redis_pool)
 
 CONFIRMATION_YES_WORDS = {"yes", "yep", "confirm", "proceed", "send", "pay", "ok", "okay", "go ahead"}
 CONFIRMATION_NO_WORDS = {"no", "cancel", "stop", "abort", "don't", "dont"}
@@ -32,10 +38,9 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
     session = await state_manager.get_session(user_id)
 
     user_lang = profile.lang if profile and profile.lang else "english"
-    default_phone = profile.phone_num if (profile and profile.phone_num and is_valid_phone(profile.phone_num)) else None
 
     # =========================================================================
-    # STATE 1: PENDING_CONFIRMATION
+    # STATE 1: PENDING_CONFIRMATION -> PIN / PREFERENCE CHECK
     # =========================================================================
     if session and session.get("state") == "PENDING_CONFIRMATION":
         intent = session.get("intent")
@@ -43,13 +48,51 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
         slots = payload.get("slots", {})
 
         if clean_text in CONFIRMATION_YES_WORDS:
-            await state_manager.clear_session(user_id)
-            handler = get_vending_handler(intent)
-            if not handler or not db or not profile:
-                return {"status": "error", "message": "Transaction handler or profile context missing."}
+            # 1. Check if user has an active 5-minute authorized session in Redis
+            auth_token = await redis_client.get(f"pin_auth:{user_id}")
+            if auth_token:
+                await state_manager.clear_session(user_id)
+                handler = get_vending_handler(intent)
+                if not handler or not db or not profile:
+                    return {"status": "error", "message": "Transaction handler or profile context missing."}
+                result = await handler.execute(db=db, profile=profile, slots=slots)
+                return {"status": result.get("status"), "message": result.get("message")}
 
-            result = await handler.execute(db=db, profile=profile, slots=slots)
-            return {"status": result.get("status"), "message": result.get("message")}
+            # 2. First-time preference check: Prompt for 5min vs Always if unset
+            if profile.pin_mode is None:
+                await state_manager.set_session(
+                    user_id=user_id,
+                    state="AWAITING_PIN_PREFERENCE",
+                    intent=intent,
+                    payload={"slots": slots}
+                )
+                preference_markup = {
+                    "inline_keyboard": [
+                        [{"text": "⏱️ Remember for 5 Mins", "callback_data": "pin_mode:5min"}],
+                        [{"text": "🔐 Always Require PIN", "callback_data": "pin_mode:always"}],
+                        [{"text": "❌ Cancel", "callback_data": "action_cancel"}]
+                    ]
+                }
+                return {
+                    "status": "awaiting_pin_preference",
+                    "message": (
+                        "🛡️ **Security Preference Setup**\n\n"
+                        "How would you like MyPadi to authorize your transactions?"
+                    ),
+                    "reply_markup": preference_markup
+                }
+
+            # 3. Preference already configured: Request 4-digit PIN directly
+            await state_manager.set_session(
+                user_id=user_id,
+                state="AWAITING_PIN",
+                intent=intent,
+                payload={"slots": slots}
+            )
+            return {
+                "status": "awaiting_pin",
+                "message": "🔐 Please enter your **4-digit transaction PIN** to authorize this payment:"
+            }
 
         elif clean_text in CONFIRMATION_NO_WORDS:
             await state_manager.clear_session(user_id)
@@ -67,7 +110,6 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
         if handler:
             updated_slots = await handler.extract_slots(message_text, current_slots)
 
-            # Strict phone validation guard
             extracted_phone = updated_slots.get("phone_number")
             if extracted_phone and not is_valid_phone(extracted_phone):
                 updated_slots["phone_number"] = None
@@ -78,9 +120,7 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
             phone_num = updated_slots.get("phone_number")
             vendor_plan_id = current_slots.get("vendor_plan_id") or updated_slots.get("vendor_plan_id")
 
-            # =========================================================================
-            # NETWORK MISMATCH GUARD (Active for both button & text flows)
-            # =========================================================================
+            # Network mismatch guard
             if intent in ["data", "buy_data"] and selected_net and phone_num and is_valid_phone(phone_num):
                 detected_raw = detect_network(phone_num)
                 if detected_raw:
@@ -116,7 +156,6 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
                             "reply_markup": conflict_markup
                         }
 
-            # If plan was already picked via inline button and phone number is provided
             if intent in ["data", "buy_data"] and vendor_plan_id and updated_slots.get("phone_number") and db:
                 target_phone = updated_slots["phone_number"]
                 
@@ -150,7 +189,6 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
                     )
                     return {"status": "awaiting_confirmation", "message": confirm_text}
 
-            # Intercept Data flow if starting purely from text without plan selection
             if intent in ["data", "buy_data"] and updated_slots.get("network") and updated_slots.get("phone_number") and db and not vendor_plan_id:
                 await state_manager.clear_session(user_id)
                 net = updated_slots.get("network")
@@ -204,9 +242,9 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
         if phone and not is_valid_phone(phone):
             phone = None
 
-        target_phone = phone or default_phone
+        # Do NOT auto-bind to onboarding profile phone; require explicit recipient phone
+        target_phone = phone
 
-        # Network Mismatch Guard for Idle flow
         if network and target_phone and is_valid_phone(target_phone):
             detected_raw = detect_network(target_phone)
             if detected_raw:

@@ -1,5 +1,6 @@
 # src/services/handlers/data.py
 import re
+from decimal import Decimal
 from typing import Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -10,8 +11,8 @@ from src.utils.ledger_guard import initialize_local_ledger
 from src.models.transaction import TransactionType, TransactionStatus
 from src.models.data_plan import DataPlan
 from src.services.bigisub import bigisub_client
+from src.services.transaction_service import TransactionService
 from src.utils.responses import TRANSACTION_RESPONSES
-from src.services.data_ux_handler import process_data_ux_routing
 
 
 def normalize_network_name(net_str: Optional[str]) -> str:
@@ -32,7 +33,6 @@ class DataHandler(BaseVendingHandler):
     required_slots = ["network", "phone_number"]
 
     def get_missing_slot_prompt(self, missing_slot: str, user_lang: str) -> str:
-        """Synchronous prompt lookup to prevent coroutine serialization errors."""
         prompts = {
             "network": {
                 "english": "Which network is this data bundle for? (MTN, Glo, Airtel, 9mobile)",
@@ -52,18 +52,15 @@ class DataHandler(BaseVendingHandler):
         merged = current_slots.copy() if current_slots else {}
         clean_text = text.strip()
 
-        # Extract phone number
         phone_match = re.search(r"\b(0\d{9,10}|234\d{10})\b", clean_text)
         if phone_match:
             merged["phone_number"] = phone_match.group(1)
 
-        # Extract network
         for net in ["mtn", "glo", "airtel", "9mobile", "etisalat"]:
             if net in clean_text.lower():
                 merged["network"] = normalize_network_name(net)
                 break
 
-        # Auto-detect network from phone prefix if missing
         target_phone = merged.get("phone_number")
         if target_phone and not merged.get("network"):
             detected = detect_network(target_phone)
@@ -87,7 +84,7 @@ class DataHandler(BaseVendingHandler):
         if not plan_obj:
             return {"status": "error", "message": "❌ Selected data plan not found or expired."}
 
-        req_amount = float(plan_obj.retail_amount)
+        req_amount = Decimal(str(plan_obj.retail_amount))
 
         cleared, local_tx = await initialize_local_ledger(
             db=db,
@@ -107,11 +104,48 @@ class DataHandler(BaseVendingHandler):
 
         if vending_res.get("success") is True:
             local_tx.status = TransactionStatus.SUCCESSFUL
-            local_tx.reference = vending_res.get("transaction_id")
+            local_tx.reference = vending_res.get("transaction_id") or TransactionService.generate_reference("MP-DAT")
+            local_tx.balance_after = profile.user_wallet
+            local_tx.token_or_details = f"{plan_obj.network_name.upper()} {plan_obj.size} ({plan_obj.validity})"
             await db.commit()
-            return {"status": "success", "message": f"🎉 Data bundle ({plan_obj.size}) successfully sent to {target_phone}!"}
+
+            receipt_msg = TransactionService.format_receipt(
+                txn=local_tx,
+                service_label=f"{network.upper()} Data ({plan_obj.size})",
+                detail_label="Validity & Bundle"
+            )
+
+            await TransactionService.dispatch_admin_alert(
+                event_title="Data Bundle Vended",
+                details={
+                    "User": profile.user_tag,
+                    "Bundle": f"{network.upper()} {plan_obj.size}",
+                    "Amount": f"₦{req_amount:,.2f}",
+                    "Recipient": target_phone,
+                    "Ref": local_tx.reference
+                },
+                level="INFO"
+            )
+
+            return {"status": "success", "message": receipt_msg}
         else:
-            profile.user_wallet = float(profile.user_wallet or 0) + req_amount
+            profile.user_wallet = (profile.user_wallet or Decimal("0.00")) + req_amount
             local_tx.status = TransactionStatus.FAILED
+            local_tx.balance_after = profile.user_wallet
             await db.commit()
-            return {"status": "error", "message": f"❌ Data Purchase Failed: {vending_res.get('error', 'Gateway error')}"}
+
+            failed_reason = vending_res.get("error", "Gateway error")
+
+            await TransactionService.dispatch_admin_alert(
+                event_title="Data Vending Failed",
+                details={
+                    "User": profile.user_tag,
+                    "Bundle": f"{network.upper()} {plan_obj.size}",
+                    "Amount": f"₦{req_amount:,.2f}",
+                    "Recipient": target_phone,
+                    "Error": failed_reason
+                },
+                level="ERROR"
+            )
+
+            return {"status": "error", "message": f"❌ Data Purchase Failed: {failed_reason}\n\nYour wallet has been refunded."}

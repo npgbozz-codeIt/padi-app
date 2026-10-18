@@ -1,5 +1,8 @@
 # src/utils/ledger_guard.py
+from decimal import Decimal
+from typing import Optional, Union
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from src.models.profile import Profile
 from src.models.transaction import Transaction, TransactionType, TransactionStatus
 
@@ -7,32 +10,42 @@ from src.models.transaction import Transaction, TransactionType, TransactionStat
 async def initialize_local_ledger(
     db: AsyncSession,
     profile: Profile,
-    amount: int,
+    amount: Union[Decimal, int, float, str],
     recipient: str,
     tx_type: TransactionType,
     provider: str,
-) -> tuple[bool, Transaction | None]:
+) -> tuple[bool, Optional[Transaction]]:
     """
-    Unified ledger safety rail. Checks balances and stages a pending database entry atomicity.
+    Unified ledger safety rail. Checks balances and stages a pending database entry atomically.
     Returns (True, transaction_instance) if wallet balance checks clear successfully.
     """
-    current_balance = float(profile.user_wallet or 0.0)
+    # 1. Enforce Decimal precision across all balance arithmetic
+    current_balance = (
+        profile.user_wallet
+        if profile.user_wallet is not None
+        else Decimal("0.00")
+    )
+    if not isinstance(current_balance, Decimal):
+        current_balance = Decimal(str(current_balance))
 
-    # 1. Enforce safety barrier check
-    if current_balance < amount:
+    dec_amount = Decimal(str(amount))
+
+    # 2. Enforce safety barrier check
+    if current_balance < dec_amount:
         return False, None
 
-    # 2. Subtract local currency values atomically before firing external endpoints
-    profile.user_wallet = current_balance - amount
+    # 3. Deduct wallet balance atomically before firing external endpoints
+    profile.user_wallet = current_balance - dec_amount
 
-    # 3. Create the centralized financial tracking entity
+    # 4. Create the centralized financial tracking entity
     pending_tx = Transaction(
         profile_id=profile.id,
         tx_type=tx_type,
-        amount=amount,
+        amount=dec_amount,
         recipient=recipient,
-        provider=provider,
+        provider=provider.upper() if provider else None,
         status=TransactionStatus.PENDING,
+        balance_after=profile.user_wallet,
     )
 
     db.add(pending_tx)

@@ -1,6 +1,7 @@
 # src/services/handlers/airtime.py
 import re
-from typing import Dict, Any
+from decimal import Decimal
+from typing import Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.handlers.base import BaseVendingHandler
@@ -9,6 +10,7 @@ from src.utils.network_detector import detect_network
 from src.utils.ledger_guard import initialize_local_ledger
 from src.models.transaction import TransactionType, TransactionStatus
 from src.services.bigisub import bigisub_client
+from src.services.transaction_service import TransactionService
 from src.utils.responses import TRANSACTION_RESPONSES
 
 
@@ -80,7 +82,7 @@ class AirtimeHandler(BaseVendingHandler):
         tx_copy = TRANSACTION_RESPONSES.get(user_lang, TRANSACTION_RESPONSES["english"])
 
         target_phone = slots.get("phone_number") or profile.phone_num
-        req_amount = int(slots.get("amount", 0))
+        req_amount = Decimal(str(slots.get("amount", 0)))
         req_network = normalize_network_name(slots.get("network"))
 
         # Check balance and register ledger entry
@@ -95,28 +97,61 @@ class AirtimeHandler(BaseVendingHandler):
 
         if not cleared:
             insufficient_msg = tx_copy["insufficient_funds"].format(
-                balance=profile.user_wallet or 0.0
+                balance=profile.user_wallet or Decimal("0.00")
             )
             return {"status": "error", "message": insufficient_msg}
 
-        # Dispatch API Call to Bigisub with clean network shortcode
+        # Dispatch API Call to Bigisub
         vending_res = await bigisub_client.vend_airtime(
-            phone=target_phone, amount=req_amount, network=req_network
+            phone=target_phone, amount=int(req_amount), network=req_network
         )
 
         if vending_res.get("success") is True:
             local_tx.status = TransactionStatus.SUCCESSFUL
-            local_tx.reference = vending_res.get("transaction_id")
+            local_tx.reference = vending_res.get("transaction_id") or TransactionService.generate_reference("MP-AIR")
+            local_tx.balance_after = profile.user_wallet
+            local_tx.token_or_details = f"{req_network.upper()} Airtime"
             await db.commit()
 
-            success_msg = tx_copy["vending_success"].format(
-                amount=req_amount, provider=req_network.upper(), recipient=target_phone
+            # Generate structured digital receipt
+            receipt_msg = TransactionService.format_receipt(
+                txn=local_tx,
+                service_label=f"{req_network.upper()} Airtime"
             )
-            return {"status": "success", "message": success_msg}
+
+            # Fire real-time admin alert
+            await TransactionService.dispatch_admin_alert(
+                event_title="Airtime Vended",
+                details={
+                    "User": profile.user_tag,
+                    "Amount": f"₦{req_amount:,.2f}",
+                    "Recipient": target_phone,
+                    "Network": req_network.upper(),
+                    "Ref": local_tx.reference
+                },
+                level="INFO"
+            )
+
+            return {"status": "success", "message": receipt_msg}
         else:
-            profile.user_wallet = float(profile.user_wallet or 0) + req_amount
+            # Safe refund using Decimal arithmetic
+            profile.user_wallet = (profile.user_wallet or Decimal("0.00")) + req_amount
             local_tx.status = TransactionStatus.FAILED
+            local_tx.balance_after = profile.user_wallet
             await db.commit()
 
-            failed_msg = vending_res.get("error", tx_copy["vending_failed"])
-            return {"status": "error", "message": f"❌ Transaction Failed: {failed_msg}"}
+            failed_reason = vending_res.get("error", tx_copy.get("vending_failed", "Gateway error"))
+
+            await TransactionService.dispatch_admin_alert(
+                event_title="Airtime Vending Failed",
+                details={
+                    "User": profile.user_tag,
+                    "Amount": f"₦{req_amount:,.2f}",
+                    "Recipient": target_phone,
+                    "Network": req_network.upper(),
+                    "Error": failed_reason
+                },
+                level="ERROR"
+            )
+
+            return {"status": "error", "message": f"❌ Transaction Failed: {failed_reason}\n\nYour wallet has been refunded."}

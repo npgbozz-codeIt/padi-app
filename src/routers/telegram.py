@@ -3,7 +3,7 @@ import re
 import bcrypt
 import httpx
 from typing import Annotated
-import redis.asyncio as aioredis
+from src.database.redis import redis_client
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,10 +35,6 @@ from src.utils.tag_generator import tag_generator
 router = APIRouter()
 paystack_provider = PaystackFinancialProvider()
 
-redis_pool = aioredis.ConnectionPool(
-    host="localhost", port=6379, db=0, decode_responses=True, protocol=2
-)
-redis_client = aioredis.Redis(connection_pool=redis_pool)
 
 
 def is_valid_phone(phone_str: str) -> bool:

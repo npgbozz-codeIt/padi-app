@@ -3,35 +3,28 @@ import json
 import logging
 import os
 from typing import Any, Dict, Optional
-import redis.asyncio as redis
-from dotenv import load_dotenv
-
-load_dotenv()
+from src.database.redis import redis_client, close_redis
 
 logger = logging.getLogger(__name__)
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL", 300))  # 5-minute timeout
 
 
 class StateManager:
     def __init__(self):
-        self.redis_client: Optional[redis.Redis] = None
+        self.redis_client = redis_client
 
-    async def get_redis(self) -> redis.Redis:
+    async def get_redis(self):
         """
-        Lazy initialization of async Redis client connection.
+        Returns the shared async Redis client connection.
         """
-        if self.redis_client is None:
-            self.redis_client = redis.from_url(REDIS_URL, decode_responses=True)
         return self.redis_client
 
     async def close(self):
         """
         Closes Redis connection pool cleanly.
         """
-        if self.redis_client:
-            await self.redis_client.close()
+        await close_redis()
 
     def _get_key(self, user_id: str) -> str:
         return f"mypadi:session:{user_id}"

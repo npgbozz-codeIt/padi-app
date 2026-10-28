@@ -1,12 +1,7 @@
 # src/services/session_manager.py
 import json
 from typing import Dict, Any, Optional
-import redis.asyncio as aioredis
-
-redis_pool = aioredis.ConnectionPool(
-    host="localhost", port=6379, db=0, decode_responses=True, protocol=2
-)
-redis_client = aioredis.Redis(connection_pool=redis_pool)
+from src.database.redis import redis_client
 
 
 class SessionManager:

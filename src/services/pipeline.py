@@ -10,14 +10,10 @@ from src.services.handlers.registry import get_vending_handler
 from src.services.data_ux_handler import process_data_ux_routing, format_data_size
 from src.models.data_plan import DataPlan
 from src.utils.network_detector import detect_network, normalize_network_name
-import redis.asyncio as aioredis
+from src.database.redis import redis_client
 
 logger = logging.getLogger(__name__)
 
-redis_pool = aioredis.ConnectionPool(
-    host="localhost", port=6379, db=0, decode_responses=True, protocol=2
-)
-redis_client = aioredis.Redis(connection_pool=redis_pool)
 
 CONFIRMATION_YES_WORDS = {"yes", "yep", "confirm", "proceed", "send", "pay", "ok", "okay", "go ahead"}
 CONFIRMATION_NO_WORDS = {"no", "cancel", "stop", "abort", "don't", "dont"}

@@ -57,6 +57,9 @@ TRANSACTION_RESPONSES = {
                 ],
                 [
                     {"text": "⚽ Sports Betting", "callback_data": "menu_betting"},
+                    {"text": "📜 History", "callback_data": "hist_page:1"},
+                ],
+                [
                     {"text": "💬 Type other bills", "callback_data": "action_cancel"},
                 ],
             ]
@@ -87,6 +90,9 @@ TRANSACTION_RESPONSES = {
                 ],
                 [
                     {"text": "⚽ Betting Wallet", "callback_data": "menu_betting"},
+                    {"text": "📜 History", "callback_data": "hist_page:1"},
+                ],
+                [
                     {"text": "💬 Type other bills", "callback_data": "action_cancel"},
                 ],
             ]
@@ -117,6 +123,9 @@ TRANSACTION_RESPONSES = {
                 ],
                 [
                     {"text": "⚽ Betting", "callback_data": "menu_betting"},
+                    {"text": "📜 Tarihi (History)", "callback_data": "hist_page:1"},
+                ],
+                [
                     {"text": "💬 Rubuta sauran kuɗi", "callback_data": "action_cancel"},
                 ],
             ]

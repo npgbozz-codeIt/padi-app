@@ -14,7 +14,7 @@ from src.database.db_conn import get_db
 from src.models.data_plan import DataPlan
 from src.models.identity import UserIdentity
 from src.models.profile import Profile
-from src.models.transaction import Transaction
+from src.models.transaction import Transaction, TransactionStatus
 from src.services.data_ux_handler import (
     format_data_size,
     generate_plan_selection_buttons,
@@ -62,6 +62,87 @@ async def delete_telegram_message(chat_id: int, message_id: int):
             await client.post(url_delete, json={"chat_id": chat_id, "message_id": message_id})
     except Exception as e:
         logger.warning(f"Failed to delete sensitive message: {e}")
+
+
+def get_labels_for_txn(txn: Transaction) -> tuple[str, str]:
+    """Computes human-friendly service and detail labels for any transaction type."""
+    tx_type = txn.tx_type.value if hasattr(txn.tx_type, "value") else str(txn.tx_type)
+    provider = (txn.provider or "").upper()
+    if tx_type == "airtime":
+        return f"{provider} Airtime".strip() or "Airtime", "Details"
+    elif tx_type == "data":
+        return f"{provider} Data".strip() or "Data", "Bundle"
+    elif tx_type == "electricity":
+        return f"{provider} Electricity".strip() or "Electricity", "Token"
+    elif tx_type == "deposit":
+        return "Wallet Top-up", "Details"
+    elif tx_type == "cabletv":
+        return f"{provider} Cable TV".strip() or "Cable TV", "Package"
+    elif tx_type == "betting":
+        return f"{provider} Betting".strip() or "Betting", "Account"
+    return tx_type.replace("_", " ").title(), "Details"
+
+
+async def render_history_page(db: AsyncSession, profile: Profile, page: int = 1) -> tuple[str, dict]:
+    """Renders a 5-item compact transaction history summary page with interactive buttons."""
+    page = max(1, page)
+    limit = 5
+    offset = (page - 1) * limit
+
+    stmt = (
+        select(Transaction)
+        .where(Transaction.profile_id == profile.id)
+        .order_by(Transaction.date_created.desc())
+        .offset(offset)
+        .limit(limit + 1)
+    )
+    res = await db.execute(stmt)
+    txns = res.scalars().all()
+
+    has_more = len(txns) > limit
+    page_txns = txns[:limit]
+
+    if not page_txns:
+        text = (
+            "📜 *Transaction History*\n\n"
+            "You don't have any transactions recorded yet, Boss!\n"
+            "When you recharge airtime, purchase data, or pay bills, your history will appear here."
+        )
+        markup = {"inline_keyboard": [[{"text": "❌ Close", "callback_data": "action_cancel"}]]}
+        return text, markup
+
+    lines = [f"📜 *Transaction History (Page {page})*", "──────────────────────────"]
+    num_buttons = []
+
+    for idx, txn in enumerate(page_txns, start=1):
+        date_str = txn.date_created.strftime("%d %b")
+        service_label, _ = get_labels_for_txn(txn)
+        amount_str = f"₦{int(txn.amount):,}" if txn.amount % 1 == 0 else f"₦{txn.amount:,.2f}"
+
+        status_emoji = "✅"
+        if txn.status == TransactionStatus.PENDING:
+            status_emoji = "⏳"
+        elif txn.status == TransactionStatus.FAILED:
+            status_emoji = "❌"
+
+        lines.append(f"{idx}. {date_str} • {service_label} • {amount_str} {status_emoji}")
+        num_buttons.append({"text": f"[ {idx} ]", "callback_data": f"hist_view:{txn.reference}"})
+
+    lines.append("──────────────────────────")
+    lines.append("_Tap a number below to view the receipt and details:_")
+
+    keyboard = [num_buttons]
+    nav_row = []
+    if page > 1:
+        nav_row.append({"text": "⬅️ Newer", "callback_data": f"hist_page:{page - 1}"})
+    if has_more:
+        nav_row.append({"text": "➡️ Older", "callback_data": f"hist_page:{page + 1}"})
+
+    if nav_row:
+        keyboard.append(nav_row)
+    keyboard.append([{"text": "❌ Close", "callback_data": "action_cancel"}])
+
+    return "\n".join(lines), {"inline_keyboard": keyboard}
 
 
 async def handle_inline_callbacks(update: dict, db: AsyncSession):
@@ -145,6 +226,60 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
             })
 
         return {"status": "ok"}
+    # -----------------------------------------------------------------
+    # Handle Transaction History Pagination & Drill-Down
+    # -----------------------------------------------------------------
+    if click_data.startswith("hist_page:"):
+        if not profile:
+            return {"status": "error"}
+        raw_page = click_data.split(":", 1)[1]
+        page = int(raw_page) if raw_page.isdigit() else 1
+        text, markup = await render_history_page(db=db, profile=profile, page=page)
+        await telegram_client.edit_message_text({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "reply_markup": markup,
+            "parse_mode": "Markdown",
+        })
+        return {"status": "ok"}
+
+    if click_data.startswith("hist_view:"):
+        if not profile:
+            return {"status": "error"}
+        reference = click_data.split(":", 1)[1]
+        stmt = select(Transaction).where(Transaction.reference == reference)
+        res = await db.execute(stmt)
+        txn = res.scalars().first()
+
+        if not txn:
+            if callback_query_id:
+                try:
+                    await telegram_client.answer_callback_query({
+                        "callback_query_id": callback_query_id,
+                        "text": "❌ Transaction record not found."
+                    })
+                except Exception:
+                    pass
+            return {"status": "error"}
+
+        service_label, detail_label = get_labels_for_txn(txn)
+        receipt_text = TransactionService.format_receipt(txn, service_label=service_label, detail_label=detail_label)
+        drilldown_markup = {
+            "inline_keyboard": [
+                [{"text": "🖼️ Download Image Receipt", "callback_data": f"rx_img:{txn.reference}"}],
+                [{"text": "⬅️ Back to History", "callback_data": "hist_page:1"}],
+            ]
+        }
+        await telegram_client.edit_message_text({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": receipt_text,
+            "reply_markup": drilldown_markup,
+            "parse_mode": "Markdown",
+        })
+        return {"status": "ok"}
+
 
     # Handle PIN Reset Trigger Callback
     if click_data == "trigger_reset_pin":
@@ -877,6 +1012,16 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
         # -----------------------------------------------------------------
         user_lang = profile.lang or "english"
         tx_copy = TRANSACTION_RESPONSES.get(user_lang, TRANSACTION_RESPONSES["english"])
+
+        if user_message.lower() in ["/history", "history"]:
+            history_text, history_markup = await render_history_page(db=db, profile=profile, page=1)
+            await telegram_client.send_message({
+                "chat_id": chat_id,
+                "text": history_text,
+                "reply_markup": history_markup,
+                "parse_mode": "Markdown",
+            })
+            return {"success": 200, "message": "history_summary"}
 
         if user_message.lower() in ["/fund", "fund", "fund wallet", "topup"]:
             await telegram_client.send_message({

@@ -56,7 +56,7 @@ TRANSACTION_RESPONSES = {
                     {"text": "📺 Cable TV", "callback_data": "menu_cable"},
                 ],
                 [
-                    {"text": "⚽ Sports Betting", "callback_data": "menu_betting"},
+                    {"text": "🌐 Internet", "callback_data": "menu_internet"},
                     {"text": "📜 History", "callback_data": "hist_page:1"},
                 ],
                 [
@@ -69,6 +69,8 @@ TRANSACTION_RESPONSES = {
         "electricity_prompt": "💡 *Electricity Payment Mode*\n\nPlease provide your distribution company name, meter number, and the amount (e.g., _Pay 5000 naira for IKEDC prepaid meter 123456789_).",
         "cable_prompt": "📺 *Cable TV Subscription Mode*\n\nPlease enter your decoder details, package type, and smartcard registration number.",
         "betting_prompt": "⚽ *Betting Wallet Funding Mode*\n\nPlease state your preferred betting company ID reference along with your payment tier details.",
+        "internet_prompt": "🌐 *Internet Subscription Mode*\n\nPlease enter your internet service provider (e.g., Smile, Spectranet) and account/device number.",
+        "balance_response": "💰 *Your MyPadi Wallet Balance is:* *₦{balance}*\n\nTap below to top up your wallet anytime:",
         "missing_slots": "An issue popped up while processing that. Please check that you provided the phone number, correct network provider name, and transaction amount clearly!",
         "insufficient_funds": "🪙 Your balance is running low! Your current wallet balance sits at ₦{balance}. Kindly top up your profile account to complete this trade seamlessly.",
         "vending_success": "🎉 Transaction complete! ₦{amount} {provider} recharge has been successfully applied to target line {recipient}.",
@@ -89,7 +91,7 @@ TRANSACTION_RESPONSES = {
                     {"text": "📺 Cable TV", "callback_data": "menu_cable"},
                 ],
                 [
-                    {"text": "⚽ Betting Wallet", "callback_data": "menu_betting"},
+                    {"text": "🌐 Internet", "callback_data": "menu_internet"},
                     {"text": "📜 History", "callback_data": "hist_page:1"},
                 ],
                 [
@@ -102,6 +104,8 @@ TRANSACTION_RESPONSES = {
         "electricity_prompt": "💡 *Electricity Payment Mode*\n\nAbeg drop your company code, meter number, and the amount (e.g., _Pay 5000 naira for IKEDC prepaid meter 123456789_).",
         "cable_prompt": "📺 *Cable TV Subscription Mode*\n\nTell me your decoder company, package name, and smartcard number make we run am.",
         "betting_prompt": "⚽ *Betting Wallet Funding Mode*\n\nDrop your betting user ID plus the amount make we fund your account sharply.",
+        "internet_prompt": "🌐 *Internet Subscription Mode*\n\nAbeg drop your internet provider name (like Smile or Spectranet) plus your account number make we run am.",
+        "balance_response": "💰 *Your MyPadi Wallet Balance na:* *₦{balance}*\n\nPress the button down make you fund your wallet:",
         "missing_slots": "Something miss inside details wey you send, boss! Check well make sure network, phone number, and how much dey inside properly.",
         "insufficient_funds": "🪙 Your money no reach this level, boss. Your wallet balance na ₦{balance}. Abeg fund your pocket make we try again.",
         "vending_success": "🎉 E don go successfully! We don wire ₦{amount} {provider} airtime directly to {recipient}.",
@@ -122,7 +126,7 @@ TRANSACTION_RESPONSES = {
                     {"text": "📺 Cable TV", "callback_data": "menu_cable"},
                 ],
                 [
-                    {"text": "⚽ Betting", "callback_data": "menu_betting"},
+                    {"text": "🌐 Intanet (Internet)", "callback_data": "menu_internet"},
                     {"text": "📜 Tarihi (History)", "callback_data": "hist_page:1"},
                 ],
                 [
@@ -135,6 +139,8 @@ TRANSACTION_RESPONSES = {
         "electricity_prompt": "💡 *Tsarin Wutar Lantarki*\n\nDa fatan za a bayar da sunan kamfani, lambar mita, da adadin kuɗi (misali, _Pay 5000 naira for IKEDC prepaid meter 123456789_).",
         "cable_prompt": "📺 *Tsarin Cable TV*\n\nShigar da bayanan akwatin ku, nau'in fakiti, da lambar katin ku.",
         "betting_prompt": "⚽ *Tsarin Betting*\n\nShigar da ID na kamfanin betting ɗin ku tare da adadin kuɗi.",
+        "internet_prompt": "🌐 *Tsarin Intanet*\n\nDa fatan za a bayar da mai ba da sabis na intanet da lambar asusunku.",
+        "balance_response": "💰 *Ma'ajin Ku Na MyPadi Yana Da:* *₦{balance}*\n\nDanna maɓallin da ke ƙasa don saka kuɗi:",
         "missing_slots": "❌ Cikakken bayani bai cika ba. Da fatan za a sake dubawa hanyar sadarwa, adadin kudi, da lambar waya.",
         "insufficient_funds": "🪙 Kuɗin ku bai isa ba! Ma'ajin ku na yanzu shine ₦{balance}. Da fatan za a saka kuɗi don ci gaba.",
         "vending_success": "🎉 An yi nasara! An tura ₦{amount} {provider} zuwa {recipient}.",

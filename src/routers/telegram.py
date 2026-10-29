@@ -1,5 +1,6 @@
 # src/routers/telegram.py
 import re
+from decimal import Decimal
 import bcrypt
 import httpx
 from typing import Annotated
@@ -35,6 +36,21 @@ from src.utils.tag_generator import tag_generator
 router = APIRouter()
 paystack_provider = PaystackFinancialProvider()
 
+
+
+def is_balance_inquiry(text: str) -> bool:
+    """Detects /balance command and conversational balance query phrases."""
+    clean = text.strip().lower()
+    exact_matches = {
+        "/balance", "balance", "check balance", "wallet balance",
+        "my balance", "view balance", "show balance", "check my balance",
+        "how much dey my wallet", "kudin asusu"
+    }
+    if clean in exact_matches or clean.startswith("/balance"):
+        return True
+    if "check balance" in clean or "wallet balance" in clean or "my balance" in clean:
+        return True
+    return False
 
 
 def is_valid_phone(phone_str: str) -> bool:
@@ -115,6 +131,21 @@ async def render_history_page(db: AsyncSession, profile: Profile, page: int = 1)
     num_buttons = []
 
     for idx, txn in enumerate(page_txns, start=1):
+        # Auto-heal legacy or failed transactions missing a reference
+        if not txn.reference:
+            prefix_map = {
+                "airtime": "MP-AIR",
+                "data": "MP-DAT",
+                "electricity": "MP-ELC",
+                "cabletv": "MP-CAB",
+                "betting": "MP-BET",
+                "deposit": "MP-DEP",
+            }
+            tx_key = txn.tx_type.value if hasattr(txn.tx_type, "value") else str(txn.tx_type)
+            ref_prefix = prefix_map.get(tx_key, "MP-TXN")
+            txn.reference = TransactionService.generate_reference(ref_prefix)
+            await db.commit()
+
         date_str = txn.date_created.strftime("%d %b")
         service_label, _ = get_labels_for_txn(txn)
         amount_str = f"₦{int(txn.amount):,}" if txn.amount % 1 == 0 else f"₦{txn.amount:,.2f}"
@@ -186,6 +217,18 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
         res = await db.execute(stmt)
         txn = res.scalars().first()
 
+        if not txn and reference == "None" and profile:
+            stmt_fallback = (
+                select(Transaction)
+                .where(Transaction.profile_id == profile.id, Transaction.reference.is_(None))
+                .order_by(Transaction.date_created.desc())
+            )
+            res_fallback = await db.execute(stmt_fallback)
+            txn = res_fallback.scalars().first()
+            if txn and not txn.reference:
+                txn.reference = TransactionService.generate_reference("MP-TXN")
+                await db.commit()
+
         if not txn:
             if callback_query_id:
                 try:
@@ -247,10 +290,26 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
     if click_data.startswith("hist_view:"):
         if not profile:
             return {"status": "error"}
-        reference = click_data.split(":", 1)[1]
-        stmt = select(Transaction).where(Transaction.reference == reference)
+        target_ref = click_data.split(":", 1)[1]
+
+        # Defensive lookup: by reference, or by UUID if passed or literal 'None'
+        stmt = select(Transaction).where(Transaction.reference == target_ref)
         res = await db.execute(stmt)
         txn = res.scalars().first()
+
+        if not txn and target_ref == "None":
+            # Find the most recent transaction for this profile without a reference
+            stmt_fallback = (
+                select(Transaction)
+                .where(Transaction.profile_id == profile.id, Transaction.reference.is_(None))
+                .order_by(Transaction.date_created.desc())
+            )
+            res_fallback = await db.execute(stmt_fallback)
+            txn = res_fallback.scalars().first()
+
+        if txn and not txn.reference:
+            txn.reference = TransactionService.generate_reference("MP-TXN")
+            await db.commit()
 
         if not txn:
             if callback_query_id:
@@ -673,17 +732,17 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
         )
         return {"status": "ok"}
 
-    elif click_data in ["menu_electricity", "menu_cable", "menu_betting"]:
+    elif click_data in ["menu_electricity", "menu_cable", "menu_betting", "menu_internet"]:
         key_target = (
             "electricity_prompt"
             if click_data == "menu_electricity"
-            else ("cable_prompt" if click_data == "menu_cable" else "betting_prompt")
+            else ("cable_prompt" if click_data == "menu_cable" else ("internet_prompt" if click_data == "menu_internet" else "betting_prompt"))
         )
         await telegram_client.edit_message_text(
             {
                 "chat_id": chat_id,
                 "message_id": message_id,
-                "text": tx_copy[key_target],
+                "text": tx_copy.get(key_target, tx_copy["coming_soon"]),
                 "parse_mode": "Markdown",
             }
         )
@@ -1012,6 +1071,35 @@ async def telegram_webhook(update: dict, db: Annotated[AsyncSession, Depends(get
         # -----------------------------------------------------------------
         user_lang = profile.lang or "english"
         tx_copy = TRANSACTION_RESPONSES.get(user_lang, TRANSACTION_RESPONSES["english"])
+
+        if is_balance_inquiry(user_message):
+            await state_manager.clear_session(str(telegramuser_id))
+            current_balance = (
+                profile.user_wallet
+                if profile and profile.user_wallet is not None
+                else Decimal("0.00")
+            )
+            if not isinstance(current_balance, Decimal):
+                current_balance = Decimal(str(current_balance))
+
+            resp_template = tx_copy.get(
+                "balance_response",
+                "💰 *Your MyPadi Wallet Balance is:* *₦{balance}*\n\nTap below to top up your wallet anytime:"
+            )
+            bal_text = resp_template.format(balance=f"{current_balance:,.2f}")
+
+            fund_markup = {
+                "inline_keyboard": [
+                    [{"text": "💳 Fund Wallet via Paystack", "callback_data": "trigger_fund_wallet"}]
+                ]
+            }
+            await telegram_client.send_message({
+                "chat_id": chat_id,
+                "text": bal_text,
+                "reply_markup": fund_markup,
+                "parse_mode": "Markdown",
+            })
+            return {"success": 200, "message": "balance_displayed"}
 
         if user_message.lower() in ["/history", "history"]:
             history_text, history_markup = await render_history_page(db=db, profile=profile, page=1)

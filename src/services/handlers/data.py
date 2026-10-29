@@ -103,10 +103,16 @@ class DataHandler(BaseVendingHandler):
         )
 
         if vending_res.get("success") is True:
+            vendor_tx_id = vending_res.get("transaction_id")
             local_tx.status = TransactionStatus.SUCCESSFUL
-            local_tx.reference = vending_res.get("transaction_id") or TransactionService.generate_reference("MP-DAT")
+            if not local_tx.reference:
+                local_tx.reference = TransactionService.generate_reference("MP-DAT")
             local_tx.balance_after = profile.user_wallet
-            local_tx.token_or_details = f"{plan_obj.network_name.upper()} {plan_obj.size} ({plan_obj.validity})"
+            local_tx.token_or_details = (
+                f"{plan_obj.network_name.upper()} {plan_obj.size} ({plan_obj.validity}) • Vendor: {vendor_tx_id}"
+                if vendor_tx_id
+                else f"{plan_obj.network_name.upper()} {plan_obj.size} ({plan_obj.validity})"
+            )
             await db.commit()
 
             receipt_msg = TransactionService.format_receipt(
@@ -126,15 +132,19 @@ class DataHandler(BaseVendingHandler):
                 ]
             }
 
+            alert_details = {
+                "User": profile.user_tag,
+                "Bundle": f"{network.upper()} {plan_obj.size}",
+                "Amount": f"₦{req_amount:,.2f}",
+                "Recipient": target_phone,
+                "Ref": local_tx.reference
+            }
+            if vendor_tx_id:
+                alert_details["Vendor Ref"] = vendor_tx_id
+
             await TransactionService.dispatch_admin_alert(
                 event_title="Data Bundle Vended",
-                details={
-                    "User": profile.user_tag,
-                    "Bundle": f"{network.upper()} {plan_obj.size}",
-                    "Amount": f"₦{req_amount:,.2f}",
-                    "Recipient": target_phone,
-                    "Ref": local_tx.reference
-                },
+                details=alert_details,
                 level="INFO"
             )
 
@@ -158,9 +168,10 @@ class DataHandler(BaseVendingHandler):
                     "Bundle": f"{network.upper()} {plan_obj.size}",
                     "Amount": f"₦{req_amount:,.2f}",
                     "Recipient": target_phone,
+                    "Ref": local_tx.reference,
                     "Error": failed_reason
                 },
                 level="ERROR"
             )
 
-            return {"status": "error", "message": f"❌ Data Purchase Failed: {failed_reason}\n\nYour wallet has been refunded."}
+            return {"status": "error", "message": f"❌ Data Purchase Failed: {failed_reason}\n• Reference: `{local_tx.reference}`\n\nYour wallet has been refunded."}

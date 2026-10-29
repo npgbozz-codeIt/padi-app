@@ -107,10 +107,16 @@ class AirtimeHandler(BaseVendingHandler):
         )
 
         if vending_res.get("success") is True:
+            vendor_tx_id = vending_res.get("transaction_id")
             local_tx.status = TransactionStatus.SUCCESSFUL
-            local_tx.reference = vending_res.get("transaction_id") or TransactionService.generate_reference("MP-AIR")
+            if not local_tx.reference:
+                local_tx.reference = TransactionService.generate_reference("MP-AIR")
             local_tx.balance_after = profile.user_wallet
-            local_tx.token_or_details = f"{req_network.upper()} Airtime"
+            local_tx.token_or_details = (
+                f"{req_network.upper()} Airtime • Vendor: {vendor_tx_id}"
+                if vendor_tx_id
+                else f"{req_network.upper()} Airtime"
+            )
             await db.commit()
 
             # Formatted digital text receipt
@@ -132,15 +138,19 @@ class AirtimeHandler(BaseVendingHandler):
             }
 
             # Real-time alert to Admin Telegram
+            alert_details = {
+                "User": profile.user_tag,
+                "Amount": f"₦{req_amount:,.2f}",
+                "Recipient": target_phone,
+                "Network": req_network.upper(),
+                "Ref": local_tx.reference,
+            }
+            if vendor_tx_id:
+                alert_details["Vendor Ref"] = vendor_tx_id
+
             await TransactionService.dispatch_admin_alert(
                 event_title="Airtime Vended",
-                details={
-                    "User": profile.user_tag,
-                    "Amount": f"₦{req_amount:,.2f}",
-                    "Recipient": target_phone,
-                    "Network": req_network.upper(),
-                    "Ref": local_tx.reference,
-                },
+                details=alert_details,
                 level="INFO",
             )
 
@@ -165,6 +175,7 @@ class AirtimeHandler(BaseVendingHandler):
                     "Amount": f"₦{req_amount:,.2f}",
                     "Recipient": target_phone,
                     "Network": req_network.upper(),
+                    "Ref": local_tx.reference,
                     "Error": failed_reason,
                 },
                 level="ERROR",
@@ -172,5 +183,5 @@ class AirtimeHandler(BaseVendingHandler):
 
             return {
                 "status": "error",
-                "message": f"❌ Transaction Failed: {failed_reason}\n\nYour wallet has been refunded.",
+                "message": f"❌ Transaction Failed: {failed_reason}\n• Reference: `{local_tx.reference}`\n\nYour wallet has been refunded.",
             }

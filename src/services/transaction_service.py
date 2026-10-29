@@ -78,9 +78,16 @@ class TransactionService:
         detail_label: Optional[str] = None,
     ) -> str:
         created_time = txn.date_created.strftime("%d %b %Y, %I:%M %p")
+        status_display = "SUCCESSFUL ✅"
+        if txn.status == TransactionStatus.FAILED:
+            status_display = "FAILED (Refunded) ❌"
+        elif txn.status == TransactionStatus.PENDING:
+            status_display = "PENDING ⏳"
+
         lines = [
             "🧾 *MYPADI TRANSACTION RECEIPT*",
             "──────────────────────────",
+            f"• *Status:*        {status_display}",
             f"• *Service:*       {service_label}",
             f"• *Recipient:*     `{txn.recipient}`",
             f"• *Amount Paid:*   ₦{txn.amount:,.2f}",

@@ -1,5 +1,6 @@
 # src/services/pipeline.py
 import re
+from decimal import Decimal
 import logging
 from typing import Any, Dict
 from sqlalchemy import select
@@ -19,6 +20,21 @@ CONFIRMATION_YES_WORDS = {"yes", "yep", "confirm", "proceed", "send", "pay", "ok
 CONFIRMATION_NO_WORDS = {"no", "cancel", "stop", "abort", "don't", "dont"}
 
 
+def is_balance_inquiry(text: str) -> bool:
+    """Detects /balance command and conversational balance query phrases."""
+    clean = text.strip().lower()
+    exact_matches = {
+        "/balance", "balance", "check balance", "wallet balance",
+        "my balance", "view balance", "show balance", "check my balance",
+        "how much dey my wallet", "kudin asusu"
+    }
+    if clean in exact_matches or clean.startswith("/balance"):
+        return True
+    if "check balance" in clean or "wallet balance" in clean or "my balance" in clean:
+        return True
+    return False
+
+
 def is_valid_phone(phone_str: str) -> bool:
     """Strictly validates Nigerian phone numbers to prevent conversational strings like 'Okay'."""
     clean = re.sub(r"\D", "", str(phone_str))
@@ -34,6 +50,38 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
     session = await state_manager.get_session(user_id)
 
     user_lang = profile.lang if profile and profile.lang else "english"
+
+# =========================================================================
+    # BALANCE COMMAND / INQUIRY INTERCEPT
+    # =========================================================================
+    if is_balance_inquiry(message_text):
+        await state_manager.clear_session(user_id)
+        current_balance = (
+            profile.user_wallet
+            if profile and profile.user_wallet is not None
+            else Decimal("0.00")
+        )
+        if not isinstance(current_balance, Decimal):
+            current_balance = Decimal(str(current_balance))
+
+        from src.utils.responses import TRANSACTION_RESPONSES
+        catalog = TRANSACTION_RESPONSES.get(user_lang, TRANSACTION_RESPONSES["english"])
+        resp_template = catalog.get(
+            "balance_response",
+            "💰 *Your MyPadi Wallet Balance is:* *₦{balance}*\n\nTap below to top up your wallet anytime:"
+        )
+        bal_text = resp_template.format(balance=f"{current_balance:,.2f}")
+
+        fund_markup = {
+            "inline_keyboard": [
+                [{"text": "💳 Fund Wallet via Paystack", "callback_data": "trigger_fund_wallet"}]
+            ]
+        }
+        return {
+            "status": "balance",
+            "message": bal_text,
+            "reply_markup": fund_markup,
+        }
 
     # =========================================================================
     # STATE 1: PENDING_CONFIRMATION -> PIN / PREFERENCE CHECK

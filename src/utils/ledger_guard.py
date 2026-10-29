@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.profile import Profile
 from src.models.transaction import Transaction, TransactionType, TransactionStatus
+from src.services.transaction_service import TransactionService
 
 
 async def initialize_local_ledger(
@@ -37,13 +38,25 @@ async def initialize_local_ledger(
     # 3. Deduct wallet balance atomically before firing external endpoints
     profile.user_wallet = current_balance - dec_amount
 
-    # 4. Create the centralized financial tracking entity
+    # 4. Create the centralized financial tracking entity with an immutable reference
+    prefix_map = {
+        TransactionType.AIRTIME: "MP-AIR",
+        TransactionType.DATA: "MP-DAT",
+        TransactionType.ELECTRICITY: "MP-ELC",
+        TransactionType.CABLETV: "MP-CAB",
+        TransactionType.BETTING: "MP-BET",
+        TransactionType.DEPOSIT: "MP-DEP",
+    }
+    ref_prefix = prefix_map.get(tx_type, "MP-TXN")
+    initial_ref = TransactionService.generate_reference(ref_prefix)
+
     pending_tx = Transaction(
         profile_id=profile.id,
         tx_type=tx_type,
         amount=dec_amount,
         recipient=recipient,
         provider=provider.upper() if provider else None,
+        reference=initial_ref,
         status=TransactionStatus.PENDING,
         balance_after=profile.user_wallet,
     )

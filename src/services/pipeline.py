@@ -5,7 +5,7 @@ import logging
 from typing import Any, Dict
 from sqlalchemy import select
 
-from src.services.nlu_router import handle_user_text_request
+from src.services.nlu_engine import classify_intent
 from src.services.state_manager import state_manager
 from src.services.handlers.registry import get_vending_handler
 from src.services.data_ux_handler import process_data_ux_routing, format_data_size
@@ -45,13 +45,63 @@ def is_valid_phone(phone_str: str) -> bool:
     return False
 
 
+async def _stage_pre_verified_confirmation(
+    user_id: str,
+    intent: str,
+    handler: Any,
+    slots: Dict[str, Any],
+    db: Any,
+    profile: Any,
+) -> Dict[str, Any]:
+    """
+    Runs a handler's pre-verification pass (e.g. electricity meter lookup) before
+    staging PENDING_CONFIRMATION, or re-prompts for the offending slot on failure.
+    """
+    pre_res = await handler.execute(db=db, profile=profile, slots=slots)
+    status = pre_res.get("status")
+
+    if status == "awaiting_confirmation":
+        verified_slots = pre_res.get("slots", slots)
+        await state_manager.set_session(
+            user_id=user_id,
+            state="PENDING_CONFIRMATION",
+            intent=intent,
+            payload={"slots": verified_slots},
+        )
+        return {
+            "status": "awaiting_confirmation",
+            "message": pre_res.get("message"),
+            "reply_markup": pre_res.get("reply_markup"),
+        }
+
+    if status == "retry_slot":
+        missing_slot = pre_res.get("missing_slot")
+        updated_slots = pre_res.get("slots", slots)
+        await state_manager.set_session(
+            user_id=user_id,
+            state="AWAITING_SLOT",
+            intent=intent,
+            payload={
+                "slots": updated_slots,
+                "missing_slots": [missing_slot] if missing_slot else [],
+            },
+        )
+        return {"status": "missing_param", "message": pre_res.get("message")}
+
+    await state_manager.clear_session(user_id)
+    return {
+        "status": status or "error",
+        "message": pre_res.get("message", "Could not verify transaction details."),
+    }
+
+
 async def handle_incoming_user_message(user_id: str, message_text: str, db: Any = None, profile: Any = None) -> Dict[str, Any]:
     clean_text = message_text.strip().lower()
     session = await state_manager.get_session(user_id)
 
     user_lang = profile.lang if profile and profile.lang else "english"
 
-# =========================================================================
+    # =========================================================================
     # BALANCE COMMAND / INQUIRY INTERCEPT
     # =========================================================================
     if is_balance_inquiry(message_text):
@@ -263,12 +313,21 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
                 )
                 return {"status": "missing_param", "message": prompt_msg}
             else:
+                if getattr(handler, "requires_pre_verification", False):
+                    return await _stage_pre_verified_confirmation(
+                        user_id=user_id,
+                        intent=intent,
+                        handler=handler,
+                        slots=updated_slots,
+                        db=db,
+                        profile=profile,
+                    )
                 await state_manager.set_session(
                     user_id=user_id, state="PENDING_CONFIRMATION", intent=intent,
                     payload={"slots": updated_slots}
                 )
                 recipient = updated_slots.get('phone_number') or updated_slots.get('meter_number')
-                amount = float(updated_slots.get('amount', 0))
+                amount = Decimal(str(updated_slots.get('amount', 0)))
                 network = str(updated_slots.get('network', '')).upper()
 
                 return {
@@ -279,8 +338,13 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
     # =========================================================================
     # STATE 3: IDLE
     # =========================================================================
-    nlu_res = await handle_user_text_request(user_id=user_id, user_text=message_text, execute=False)
-    intent = nlu_res.get("action")
+    # Classify intent directly without triggering legacy orchestrator / redundant BigiSub calls
+    intent_obj = await classify_intent(message_text)
+    intent = (
+        intent_obj.action.value
+        if hasattr(intent_obj.action, "value")
+        else str(intent_obj.action)
+    )
     handler = get_vending_handler(intent)
 
     if intent in ["data", "buy_data"] and db:
@@ -371,12 +435,21 @@ async def handle_incoming_user_message(user_id: str, message_text: str, db: Any 
             )
             return {"status": "missing_param", "message": prompt_msg}
         else:
+            if getattr(handler, "requires_pre_verification", False):
+                return await _stage_pre_verified_confirmation(
+                    user_id=user_id,
+                    intent=intent or handler.intent_name,
+                    handler=handler,
+                    slots=extracted_slots,
+                    db=db,
+                    profile=profile,
+                )
             await state_manager.set_session(
                 user_id=user_id, state="PENDING_CONFIRMATION", intent=intent or "airtime",
                 payload={"slots": extracted_slots}
             )
             recipient = extracted_slots.get('phone_number') or extracted_slots.get('meter_number')
-            amount = float(extracted_slots.get('amount', 0))
+            amount = Decimal(str(extracted_slots.get('amount', 0)))
             network = str(extracted_slots.get('network', '')).upper()
 
             return {

@@ -61,8 +61,8 @@ async def process_user_vending_intent(
         phone = kwargs.get("phone", "08000000000")
 
         # Step 1: Verify Meter
-        verify_res = await bigisub_client.verify_electricity_meter(
-            provider=provider, meter_number=destination, meter_type=meter_type
+        verify_res = await bigisub_client.verify_meter(
+            meter_number=destination, disco_id=provider, meter_type=meter_type
         )
 
         if not verify_res.get("success"):
@@ -91,12 +91,12 @@ async def process_user_vending_intent(
 
         # Step 3: Execute Purchase
         return await bigisub_client.vend_electricity(
-            provider=provider,
             meter_number=destination,
-            amount=float(amount),
-            phone=phone,
-            customer_name=customer_name,
+            amount=amount,
+            disco_id=provider,
             meter_type=meter_type,
+            customer_name=customer_name,
+            phone_number=phone,
         )
 
     return {"success": False, "error": f"Unsupported conversion type: {conversion_type}"}

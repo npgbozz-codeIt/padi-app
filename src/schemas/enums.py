@@ -61,6 +61,7 @@ class IspProvider(str, Enum):
 
 
 class Disco(str, Enum):
+    ABEDC = "abedc"
     AEDC = "aedc"
     BEDC = "bedc"
     EEDC = "eedc"

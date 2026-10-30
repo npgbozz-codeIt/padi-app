@@ -12,6 +12,50 @@ from src.schemas.enums import (
     Disco,
 )
 
+DISCO_ALIASES = {
+    "aba": "abedc",
+    "abedc": "abedc",
+    "aba-electric": "abedc",
+    "abuja": "aedc",
+    "aedc": "aedc",
+    "abuja-electric": "aedc",
+    "benin": "bedc",
+    "bedc": "bedc",
+    "benin-electric": "bedc",
+    "eko": "ekedc",
+    "ekedc": "ekedc",
+    "eko-electric": "ekedc",
+    "enugu": "eedc",
+    "eedc": "eedc",
+    "enugu-electric": "eedc",
+    "ibadan": "ibedc",
+    "ibedc": "ibedc",
+    "ibadan-electric": "ibedc",
+    "ikeja": "ikedc",
+    "ikedc": "ikedc",
+    "ikeja-electric": "ikedc",
+    "jos": "jed",
+    "jed": "jed",
+    "jedc": "jed",
+    "jos-electric": "jed",
+    "kaduna": "kaedco",
+    "kaedc": "kaedco",
+    "kaedco": "kaedco",
+    "kaduna-electric": "kaedco",
+    "kano": "kedco",
+    "kedco": "kedco",
+    "kano-electric": "kedco",
+    "phed": "phed",
+    "phedc": "phed",
+    "portharcourt": "phed",
+    "port harcourt": "phed",
+    "port-harcourt": "phed",
+    "portharcourt-electric": "phed",
+    "yola": "yedc",
+    "yedc": "yedc",
+    "yola-electric": "yedc",
+}
+
 
 def coerce_to_intent_enum(v):
     if isinstance(v, str):
@@ -69,8 +113,16 @@ def coerce_to_isp_enum(v):
 
 def coerce_to_disco_enum(v):
     if isinstance(v, str):
+        clean = v.strip().lower().replace("_", " ")
+        clean = (
+            clean.replace("electricity", "")
+            .replace("electric", "")
+            .replace("disco", "")
+            .strip(" -")
+        )
+        mapped = DISCO_ALIASES.get(clean, clean)
         try:
-            return Disco(v.lower())
+            return Disco(mapped)
         except ValueError:
             pass
     return v
@@ -171,15 +223,15 @@ class CableTvExtraction(Base):
 class ElectricityExtraction(Base):
     amount: Optional[int] = Field(
         None,
-        description="The extracted amount for the electricity bill payment.",
+        description="The extracted amount in Naira for the electricity bill payment.",
     )
     company: Annotated[Optional[Disco], BeforeValidator(coerce_to_disco_enum)] = Field(
         None,
-        description="The extracted electricity distribution company (DisCo) provider (e.g., aedc, ekedc, ikedc, ibedc, eedc, kedco).",
+        description="The extracted electricity distribution company (DisCo) provider (e.g., abedc, aedc, bedc, eedc, ekedc, ibedc, ikedc, jed, kaedco, kedco, phed, yedc).",
     )
     meter_no: Optional[str] = Field(
         None,
-        description="The extracted customer utility meter number isolated from the user message.",
+        description="The extracted customer utility meter number (typically 10-13 digits) isolated from the user message.",
     )
     meter_type: Optional[Literal["prepaid", "postpaid"]] = Field(
         "prepaid",

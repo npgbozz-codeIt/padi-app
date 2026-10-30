@@ -171,7 +171,9 @@ async def extract_electricity_slots(user_text: str) -> ElectricityExtraction:
         "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
         "Extract electricity bill payment parameters. "
         "CRITICAL: The 'company' field MUST be strict lowercase matching one of: "
-        "'aedc', 'bedc', 'eedc', 'ekedc', 'ibedc', 'ikedc', 'jed', 'kaedco', 'kedco', 'phed', 'yedc'. "
+        "'abedc', 'aedc', 'bedc', 'eedc', 'ekedc', 'ibedc', 'ikedc', 'jed', 'kaedco', 'kedco', 'phed', 'yedc'. "
+        "Map city names (Aba->abedc, Abuja->aedc, Benin->bedc, Enugu->eedc, Eko->ekedc, Ibadan->ibedc, "
+        "Ikeja->ikedc, Jos->jed, Kaduna->kaedco, Kano->kedco, Port Harcourt->phed, Yola->yedc). "
         "Never output uppercase letters for company."
     )
     return await _run_nlu_completion(ElectricityExtraction, system_prompt, user_text)

@@ -1,6 +1,8 @@
 # src/services/bigisub.py
 import os
+import re
 import logging
+from decimal import Decimal
 import httpx
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
@@ -11,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 # DisCo acronym / alias normalization map matching Bigisub v2 specs
 DISCO_MAPPING = {
+    "abedc": "aba-electric",
+    "aba": "aba-electric",
     "aedc": "abuja-electric",
     "abuja": "abuja-electric",
     "ikedc": "ikeja-electric",
@@ -34,10 +38,74 @@ DISCO_MAPPING = {
     "phed": "portharcourt-electric",
     "phedc": "portharcourt-electric",
     "portharcourt": "portharcourt-electric",
+    "port harcourt": "portharcourt-electric",
+    "port-harcourt": "portharcourt-electric",
     "yedc": "yola-electric",
     "yola": "yola-electric",
-    "aba": "aba-electric",
 }
+
+DISCO_SHORT_NAMES = {
+    "aba-electric": "ABEDC",
+    "abuja-electric": "AEDC",
+    "benin-electric": "BEDC",
+    "eko-electric": "EKEDC",
+    "enugu-electric": "EEDC",
+    "ibadan-electric": "IBEDC",
+    "ikeja-electric": "IKEDC",
+    "jos-electric": "JED",
+    "kaduna-electric": "KAEDCO",
+    "kano-electric": "KEDCO",
+    "portharcourt-electric": "PHED",
+    "yola-electric": "YEDC",
+}
+
+# BigiSub live provider minimums: (min_prepaid, min_postpaid) in NGN
+DISCO_MIN_AMOUNTS = {
+    "aba-electric": (Decimal("500"), Decimal("500")),
+    "abuja-electric": (Decimal("1000"), Decimal("1000")),
+    "benin-electric": (Decimal("1000"), Decimal("500")),
+    "eko-electric": (Decimal("1000"), Decimal("500")),
+    "enugu-electric": (Decimal("500"), Decimal("500")),
+    "ibadan-electric": (Decimal("2000"), Decimal("2000")),
+    "ikeja-electric": (Decimal("1000"), Decimal("500")),
+    "jos-electric": (Decimal("1000"), Decimal("500")),
+    "kaduna-electric": (Decimal("1200"), Decimal("500")),
+    "kano-electric": (Decimal("500"), Decimal("500")),
+    "portharcourt-electric": (Decimal("500"), Decimal("500")),
+    "yola-electric": (Decimal("500"), Decimal("500")),
+}
+
+
+def resolve_disco_code(raw: Optional[str]) -> Optional[str]:
+    """Resolves natural-language DisCo names/acronyms to BigiSub's canonical code."""
+    if not raw:
+        return None
+    val = getattr(raw, "value", raw)
+    clean = str(val).strip().lower()
+    if clean in DISCO_SHORT_NAMES:
+        return clean
+    if clean in DISCO_MAPPING:
+        return DISCO_MAPPING[clean]
+    stripped = (
+        clean.replace("electricity", "")
+        .replace("electric", "")
+        .replace("disco", "")
+        .strip(" -_")
+    )
+    if stripped in DISCO_MAPPING:
+        return DISCO_MAPPING[stripped]
+    for alias, code in sorted(DISCO_MAPPING.items(), key=lambda x: -len(x[0])):
+        if re.search(rf"\b{re.escape(alias)}\b", clean):
+            return code
+    return None
+
+
+def get_disco_min_amount(disco_code: str, meter_type: str = "prepaid") -> Decimal:
+    """Returns BigiSub's minimum vend amount (as Decimal) for a DisCo and meter type."""
+    min_pre, min_post = DISCO_MIN_AMOUNTS.get(
+        disco_code, (Decimal("1000"), Decimal("1000"))
+    )
+    return min_post if str(meter_type).lower() == "postpaid" else min_pre
 
 
 class BigisubClient:
@@ -98,23 +166,21 @@ class BigisubClient:
             logger.error(f"🚨 Network error fetching electricity providers: {exc}")
             return {"success": False, "providers": [], "error": "Connection to gateway timed out."}
 
-    async def verify_electricity_meter(
-        self, provider: str, meter_number: str, meter_type: str = "prepaid"
+    async def verify_meter(
+        self, meter_number: str, disco_id: str, meter_type: str = "prepaid"
     ) -> Dict[str, Any]:
         """
         POST /bills/electricity/verify/
-        Verifies meter number and retrieves customer name.
+        Verifies a meter number with the specified DisCo and returns customer details.
         """
         url = f"{self.base_url}/bills/electricity/verify/"
-
-        # Normalize provider alias (e.g. 'aedc' -> 'abuja-electric')
-        raw_provider = str(provider).strip().lower()
-        company_slug = DISCO_MAPPING.get(raw_provider, raw_provider)
+        company_slug = resolve_disco_code(disco_id) or str(disco_id).strip().lower()
+        clean_meter = re.sub(r"\D", "", str(meter_number))
 
         payload = {
             "company": company_slug,
-            "meter_no": str(meter_number),
-            "meter_type": meter_type.lower(),
+            "meter_no": clean_meter,
+            "meter_type": str(meter_type or "prepaid").strip().lower(),
         }
 
         client = self.get_client()
@@ -127,13 +193,27 @@ class BigisubClient:
                     customer_name = (
                         data_obj.get("customer_name")
                         or res_data.get("customer_name")
-                        or "Valued Customer"
+                        or ""
+                    ).strip()
+                    if not customer_name:
+                        return {
+                            "success": False,
+                            "error": "Meter verified, but customer name was not returned by the DisCo.",
+                        }
+                    customer_address = (
+                        data_obj.get("customer_address")
+                        or data_obj.get("address")
+                        or res_data.get("customer_address")
+                        or res_data.get("address")
                     )
                     return {
                         "success": True,
                         "customer_name": customer_name,
-                        "meter_number": str(meter_number),
-                        "address": data_obj.get("address") or res_data.get("address"),
+                        "customer_address": customer_address,
+                        "address": customer_address,
+                        "meter_number": data_obj.get("meter_number") or clean_meter,
+                        "meter_type": data_obj.get("meter_type") or payload["meter_type"],
+                        "disco": data_obj.get("disco") or company_slug,
                         "error": None,
                     }
                 return {
@@ -155,33 +235,44 @@ class BigisubClient:
             logger.error(f"🚨 Network error verifying meter: {exc}")
             return {"success": False, "error": "Connection to gateway timed out."}
 
+    async def verify_electricity_meter(
+        self, provider: str, meter_number: str, meter_type: str = "prepaid"
+    ) -> Dict[str, Any]:
+        """Backward-compatible wrapper around verify_meter."""
+        return await self.verify_meter(
+            meter_number=meter_number, disco_id=provider, meter_type=meter_type
+        )
+
     async def vend_electricity(
         self,
-        provider: str,
         meter_number: str,
-        amount: float,
-        phone: str,
-        customer_name: str,
+        amount: Any,
+        disco_id: str,
         meter_type: str = "prepaid",
+        customer_name: str = "",
+        phone_number: str = "",
+        customer_address: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         POST /bills/electricity/pay/
-        Executes electricity payment using verified customer name.
+        Executes electricity payment using verified customer name and meter details.
         """
         url = f"{self.base_url}/bills/electricity/pay/"
+        company_slug = resolve_disco_code(disco_id) or str(disco_id).strip().lower()
+        clean_meter = re.sub(r"\D", "", str(meter_number))
+        clean_amount = int(Decimal(str(amount)))
 
-        raw_provider = str(provider).strip().lower()
-        company_slug = DISCO_MAPPING.get(raw_provider, raw_provider)
-
-        payload = {
+        payload: Dict[str, Any] = {
             "company": company_slug,
-            "meter_no": str(meter_number),
-            "meter_type": meter_type.lower(),
-            "amount": str(int(amount)),
-            "phone_number": str(phone),
-            "customer_name": str(customer_name),
+            "meter_no": clean_meter,
+            "meter_type": str(meter_type or "prepaid").strip().lower(),
+            "phone_number": str(phone_number),
+            "amount": clean_amount,
+            "Customer_name": str(customer_name),
             "pin": str(self.bigi_transaction_pin),
         }
+        if customer_address:
+            payload["customer_address"] = str(customer_address)
 
         client = self.get_client()
         try:
@@ -194,9 +285,13 @@ class BigisubClient:
                         "success": True,
                         "error": None,
                         "transaction_id": data_obj.get("transaction_id"),
-                        "reference": data_obj.get("reference"),
+                        "reference": data_obj.get("reference") or data_obj.get("transaction_id"),
                         "token": data_obj.get("token") or res_data.get("token"),
                         "units": data_obj.get("units") or res_data.get("units"),
+                        "amount": data_obj.get("amount"),
+                        "charged_amount": data_obj.get("charged_amount"),
+                        "service_charge": data_obj.get("service_charge"),
+                        "customer_name": data_obj.get("customer_name") or customer_name,
                         "message": res_data.get("message", "Electricity payment successful"),
                     }
                 return {
@@ -216,7 +311,11 @@ class BigisubClient:
 
         except httpx.RequestError as exc:
             logger.error(f"🚨 Network error connecting to Bigisub: {exc}")
-            return {"success": False, "error": "Connection to payment gateway timed out."}
+            return {
+                "success": False,
+                "error": "Connection to payment gateway timed out.",
+                "timeout": True,
+            }
 
     # ==================== AIRTIME ====================
 

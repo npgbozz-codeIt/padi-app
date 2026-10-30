@@ -40,8 +40,10 @@ class TelecomProvider(str, Enum):
 
 class CableTvProvider(str, Enum):
     STARTIME = "startime"
+    STARTIMES = "startimes"
     GOTV = "gotv"
     DSTV = "dstv"
+    SHOWMAX = "showmax"
 
 
 class BettingProvider(str, Enum):

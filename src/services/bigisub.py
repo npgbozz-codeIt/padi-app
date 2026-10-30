@@ -75,6 +75,32 @@ DISCO_MIN_AMOUNTS = {
     "yola-electric": (Decimal("500"), Decimal("500")),
 }
 
+CABLE_PROVIDER_MAPPING = {
+    "dstv": "dstv",
+    "ds tv": "dstv",
+    "gotv": "gotv",
+    "go tv": "gotv",
+    "startimes": "startimes",
+    "startime": "startimes",
+    "star times": "startimes",
+    "star time": "startimes",
+    "showmax": "showmax",
+}
+
+
+def resolve_cable_provider(raw: Optional[str]) -> Optional[str]:
+    """Normalizes natural-language Cable TV provider names to BigiSub's cable_name code."""
+    if not raw:
+        return None
+    val = getattr(raw, "value", raw)
+    clean = str(val).strip().lower()
+    if clean in CABLE_PROVIDER_MAPPING:
+        return CABLE_PROVIDER_MAPPING[clean]
+    for alias, code in sorted(CABLE_PROVIDER_MAPPING.items(), key=lambda x: -len(x[0])):
+        if re.search(rf"\b{re.escape(alias)}\b", clean):
+            return code
+    return None
+
 
 def resolve_disco_code(raw: Optional[str]) -> Optional[str]:
     """Resolves natural-language DisCo names/acronyms to BigiSub's canonical code."""
@@ -307,6 +333,189 @@ class BigisubClient:
                 pass
 
             logger.error(f"❌ Bigisub Electricity Pay Error ({response.status_code}): {response.text}")
+            return {"success": False, "error": error_msg}
+
+        except httpx.RequestError as exc:
+            logger.error(f"🚨 Network error connecting to Bigisub: {exc}")
+            return {
+                "success": False,
+                "error": "Connection to payment gateway timed out.",
+                "timeout": True,
+            }
+
+    # ==================== CABLE TV ====================
+
+    async def fetch_cable_plans(self, provider: Optional[str] = None) -> Dict[str, Any]:
+        """
+        GET /vtu/cable/plans/
+        Retrieves available cable TV subscription plans (optionally filtered by cable_name).
+        """
+        url = f"{self.base_url}/vtu/cable/plans/"
+        params: Dict[str, Any] = {}
+        if provider:
+            norm = resolve_cable_provider(provider) or str(provider).strip().lower()
+            params["cable_name"] = norm
+
+        client = self.get_client()
+        try:
+            response = await client.get(url, params=params)
+            if response.status_code == 200:
+                res_data = response.json()
+                plans = res_data.get("data", []) if isinstance(res_data, dict) else res_data
+                return {"success": True, "plans": plans or [], "error": None}
+
+            logger.error(f"❌ Fetch Cable Plans Error ({response.status_code}): {response.text}")
+            return {"success": False, "plans": [], "error": f"Vendor returned HTTP {response.status_code}"}
+
+        except httpx.RequestError as exc:
+            logger.error(f"🚨 Network error fetching cable plans: {exc}")
+            return {"success": False, "plans": [], "error": "Connection to gateway timed out."}
+
+    async def verify_smartcard(
+        self, smartcard_number: str, provider: str
+    ) -> Dict[str, Any]:
+        """
+        POST /vtu/cable/verify/
+        Verifies a smartcard/IUC number with the specified cable provider and returns customer details.
+        """
+        url = f"{self.base_url}/vtu/cable/verify/"
+        cable_name = resolve_cable_provider(provider) or str(provider).strip().lower()
+        clean_card = re.sub(r"\D", "", str(smartcard_number))
+
+        payload = {
+            "cable_name": cable_name,
+            "card_no": clean_card,
+        }
+
+        client = self.get_client()
+        try:
+            response = await client.post(url, json=payload)
+            if response.status_code == 200:
+                res_data = response.json()
+                if res_data.get("success") is True or res_data.get("status") == "success":
+                    data_obj = res_data.get("data", {}) or {}
+                    customer_name = (
+                        data_obj.get("customer_name")
+                        or res_data.get("customer_name")
+                        or ""
+                    ).strip()
+                    if not customer_name:
+                        return {
+                            "success": False,
+                            "error": "Smartcard verified, but customer name was not returned by provider.",
+                        }
+                    return {
+                        "success": True,
+                        "valid": data_obj.get("valid", True),
+                        "customer_name": customer_name,
+                        "current_bouquet": data_obj.get("current_bouquet") or res_data.get("current_bouquet"),
+                        "card_number": data_obj.get("card_number") or clean_card,
+                        "cable_provider": data_obj.get("cable_provider") or cable_name,
+                        "error": None,
+                    }
+                return {
+                    "success": False,
+                    "error": res_data.get("message", "Smartcard verification failed."),
+                }
+
+            error_msg = "Customer not found or invalid smartcard number."
+            try:
+                error_json = response.json()
+                error_msg = error_json.get("message", error_msg)
+            except Exception:
+                pass
+
+            logger.error(f"❌ Bigisub Smartcard Verify Error ({response.status_code}): {response.text}")
+            return {"success": False, "error": error_msg}
+
+        except httpx.RequestError as exc:
+            logger.error(f"🚨 Network error verifying smartcard: {exc}")
+            return {"success": False, "error": "Connection to gateway timed out."}
+
+    async def vend_cable(
+        self,
+        smartcard_number: str,
+        plan_id: Any,
+        provider: str,
+        amount: Optional[Any] = None,
+        customer_name: str = "",
+        phone_number: str = "",
+    ) -> Dict[str, Any]:
+        """
+        POST /vtu/cable/purchase/
+        Subscribes a verified smartcard/IUC number to a Cable TV plan.
+        `plan_id` may be a variation_code (e.g. 'dstv-yanga'), plan ID, or plan amount.
+        """
+        url = f"{self.base_url}/vtu/cable/purchase/"
+        cable_type = resolve_cable_provider(provider) or str(provider).strip().lower()
+        clean_card = re.sub(r"\D", "", str(smartcard_number))
+
+        resolved_amount = amount
+        variation_code = str(plan_id) if plan_id is not None else None
+
+        # If amount wasn't passed separately, check if plan_id is numeric amount or lookup plan catalogue
+        if resolved_amount is None and plan_id is not None:
+            plan_str = str(plan_id).strip()
+            if plan_str.isdigit() and int(plan_str) >= 500:
+                resolved_amount = int(plan_str)
+            else:
+                plans_res = await self.fetch_cable_plans(cable_type)
+                for p in plans_res.get("plans", []):
+                    if (
+                        str(p.get("variation_code", "")).lower() == plan_str.lower()
+                        or str(p.get("id", "")) == plan_str
+                    ):
+                        resolved_amount = p.get("amount")
+                        variation_code = p.get("variation_code") or variation_code
+                        break
+
+        if resolved_amount is None:
+            return {"success": False, "error": f"Could not resolve price for cable plan '{plan_id}'."}
+
+        clean_amount = int(Decimal(str(resolved_amount)))
+        payload: Dict[str, Any] = {
+            "cable_type": cable_type,
+            "card_no": clean_card,
+            "phone_number": str(phone_number or "08000000000"),
+            "amount": clean_amount,
+            "Customer": str(customer_name or "Valued Customer"),
+            "pin": str(self.bigi_transaction_pin),
+        }
+        if variation_code:
+            payload["variation_code"] = variation_code
+
+        client = self.get_client()
+        try:
+            response = await client.post(url, json=payload)
+            if response.status_code in [200, 201]:
+                res_data = response.json()
+                if res_data.get("success") is True or res_data.get("status") == "success":
+                    data_obj = res_data.get("data", {}) or {}
+                    return {
+                        "success": True,
+                        "error": None,
+                        "transaction_id": data_obj.get("transaction_id"),
+                        "reference": data_obj.get("reference") or data_obj.get("transaction_id"),
+                        "plan_name": data_obj.get("plan_name") or data_obj.get("current_bouquet"),
+                        "amount": data_obj.get("amount") or clean_amount,
+                        "service_charge": data_obj.get("service_charge"),
+                        "total_amount": data_obj.get("total_amount"),
+                        "customer_name": data_obj.get("customer_name") or customer_name,
+                        "message": res_data.get("message", "Cable subscription successful"),
+                    }
+                return {
+                    "success": False,
+                    "error": res_data.get("message", "Cable subscription failed"),
+                }
+
+            error_msg = "Cable TV payment failed at vendor level."
+            try:
+                error_json = response.json()
+                error_msg = error_json.get("message", error_msg)
+            except Exception:
+                pass
+
+            logger.error(f"❌ Bigisub Cable Purchase Error ({response.status_code}): {response.text}")
             return {"success": False, "error": error_msg}
 
         except httpx.RequestError as exc:

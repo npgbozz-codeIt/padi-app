@@ -740,6 +740,13 @@ async def handle_inline_callbacks(update: dict, db: AsyncSession):
                 intent="electricity",
                 payload={"slots": {}, "missing_slots": ["disco", "meter_number", "amount"]},
             )
+        elif click_data == "menu_cable":
+            await state_manager.set_session(
+                user_id=str(chat_id),
+                state="AWAITING_SLOT",
+                intent="cable",
+                payload={"slots": {}, "missing_slots": ["provider", "smartcard_number"]},
+            )
         key_target = (
             "electricity_prompt"
             if click_data == "menu_electricity"

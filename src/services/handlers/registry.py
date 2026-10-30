@@ -4,6 +4,7 @@ from src.services.handlers.base import BaseVendingHandler
 from src.services.handlers.airtime import AirtimeHandler
 from src.services.handlers.data import DataHandler
 from src.services.handlers.electricity import ElectricityHandler
+from src.services.handlers.cable import CableHandler
 
 HANDLER_REGISTRY = {
     "airtime": AirtimeHandler(),
@@ -13,6 +14,10 @@ HANDLER_REGISTRY = {
     "electricity": ElectricityHandler(),
     "payfor_electricity": ElectricityHandler(),
     "pay_electricity": ElectricityHandler(),
+    "cable": CableHandler(),
+    "cabletv": CableHandler(),
+    "payfor_cabletv": CableHandler(),
+    "pay_cabletv": CableHandler(),
 }
 
 

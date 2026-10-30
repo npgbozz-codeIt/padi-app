@@ -77,8 +77,11 @@ def coerce_to_telecom_enum(v):
 
 def coerce_to_cabletv_enum(v):
     if isinstance(v, str):
+        clean = v.strip().lower().replace(" ", "").replace("-", "")
+        if clean in ("startime", "startimes"):
+            clean = "startimes"
         try:
-            return CableTvProvider(v.lower())
+            return CableTvProvider(clean)
         except ValueError:
             pass
     return v
@@ -203,21 +206,33 @@ class DataExtraction(Base):
     )
 
 
-class CableTvExtraction(Base):
-    amount: Optional[int] = Field(
+class CableExtraction(Base):
+    smartcard_number: Optional[str] = Field(
         None,
-        description="The extracted amount for the cable TV subscription.",
+        description="The extracted smartcard or IUC number (typically 8-12 digits) for the cable TV decoder.",
     )
     provider: Annotated[
         Optional[CableTvProvider], BeforeValidator(coerce_to_cabletv_enum)
     ] = Field(
         None,
-        description="The extracted cable TV provider for the subscription.",
+        description="The extracted cable TV provider: 'dstv', 'gotv', or 'startimes'.",
+    )
+    bouquet: Optional[str] = Field(
+        None,
+        description="The extracted cable TV bouquet or package name (e.g., 'DStv Yanga', 'DStv Compact', 'GOtv Jolli', 'GOtv Max', 'Nova', 'Smart').",
+    )
+    amount: Optional[int] = Field(
+        None,
+        description="The extracted subscription amount in Naira, if specified by the user.",
     )
     types: Optional[Literal["renewal", "new_subscription"]] = Field(
         None,
         description="The extracted subscription type for the cable TV subscription.",
     )
+
+
+# Backward-compatible alias
+CableTvExtraction = CableExtraction
 
 
 class ElectricityExtraction(Base):

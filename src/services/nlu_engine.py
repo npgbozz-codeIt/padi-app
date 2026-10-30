@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from src.schemas.nlu import (
     AirtimeExtraction,
     BettingExtraction,
+    CableExtraction,
     CableTvExtraction,
     DataExtraction,
     EducationExtraction,
@@ -134,12 +135,15 @@ async def extract_datapurchase_slots(user_text: str) -> DataExtraction:
     return await _run_nlu_completion(DataExtraction, system_prompt, user_text)
 
 
-async def extract_cabletv_slots(user_text: str) -> CableTvExtraction:
+async def extract_cabletv_slots(user_text: str) -> CableExtraction:
     system_prompt = (
         "You are the core NLU routing engine for MyPadi, a financial bills payment bot in Nigeria. "
-        "Extract cable TV subscription parameters. Provider values MUST be lowercase: 'dstv', 'gotv', 'startime'."
+        "Extract cable TV subscription parameters: smartcard_number (IUC/decoder number), "
+        "provider ('dstv', 'gotv', 'startimes'), bouquet (e.g. 'Padi', 'Yanga', 'Confam', 'Compact', "
+        "'Smallie', 'Jolli', 'Max', 'Supa', 'Nova', 'Basic', 'Smart', 'Classic'), and amount. "
+        "Provider values MUST be lowercase: 'dstv', 'gotv', 'startimes'."
     )
-    return await _run_nlu_completion(CableTvExtraction, system_prompt, user_text)
+    return await _run_nlu_completion(CableExtraction, system_prompt, user_text)
 
 
 async def extract_betting_slots(user_text: str) -> BettingExtraction:
